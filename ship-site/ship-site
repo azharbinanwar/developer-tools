@@ -224,13 +224,27 @@ pick_project(){ # $1 account  $2 suggested name -> echoes "id<TAB>name"
   if [ "$idx" -lt ${#ids[@]} ]; then printf '%s\t%s' "${ids[$idx]}" "${names[$idx]}"; return; fi
   while :; do
     pname="$(ask "New project name" "$2")"; [ -n "$pname" ] || return 1
-    pname="$(printf '%s' "$pname" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//')"
+    pname="$(slugify "$pname")"
     r="$(vc create "$token" "${team:--}" "$pname")" && { ok "created “${r#*	}”"; printf '%s' "$r"; return; }
     warn "${r#ERR	}"
   done
 }
 
 find_root(){ local d="$PWD"; while [ "$d" != "/" ]; do [ -f "$d/package.json" ] && { printf '%s' "$d"; return; }; d="$(dirname "$d")"; done; return 1; }
+detect_pm(){ # $1 root -> the package manager whose lockfile is there, npm otherwise
+  if   [ -f "$1/pnpm-lock.yaml" ]; then echo pnpm
+  elif [ -f "$1/yarn.lock" ];      then echo yarn
+  elif [ -f "$1/bun.lock" ] || [ -f "$1/bun.lockb" ]; then echo bun
+  else echo npm; fi
+}
+slugify(){ printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//'; }
+stage_dist(){ # $1 root  $2 stage dir  $3 project id  $4 org id  $5 project name
+  cp -R "$1/dist/." "$2/" || return 1
+  [ -f "$1/vercel.json" ] && cp "$1/vercel.json" "$2/vercel.json"
+  [ -f "$2/vercel.json" ] || printf '{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}' > "$2/vercel.json"
+  mkdir -p "$2/.vercel"
+  printf '{"projectId":"%s","orgId":"%s","projectName":"%s"}' "$3" "$4" "$5" > "$2/.vercel/project.json"
+}
 
 # ── main ──────────────────────────────────────────────────────────────────
 main(){
@@ -269,10 +283,7 @@ main(){
   ROOT="$(cd "$ROOT" && pwd)"
   [ -f "$ROOT/package.json" ] || die "no package.json in $ROOT"
   name="$(node -p "require('$ROOT/package.json').name||''" 2>/dev/null)"; name="${name:-$(basename "$ROOT")}"
-  if   [ -f "$ROOT/pnpm-lock.yaml" ]; then pm=pnpm
-  elif [ -f "$ROOT/yarn.lock" ];      then pm=yarn
-  elif [ -f "$ROOT/bun.lock" ] || [ -f "$ROOT/bun.lockb" ]; then pm=bun
-  else pm=npm; fi
+  pm="$(detect_pm "$ROOT")"
 
   banner "ship-site $VERSION" "build it, publish it, copy the link"
   step "Project"
@@ -290,7 +301,7 @@ main(){
   fi
   if [ -z "$acct" ] || [ -z "$pid" ]; then
     acct="$(pick_account)" || die "no account"
-    proj="$(pick_project "$acct" "$(printf '%s' "$name" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g')")" || die "no project picked"
+    proj="$(pick_project "$acct" "$(slugify "$name")")" || die "no project picked"
     pid="${proj%%	*}"; pname="${proj#*	}"
     vc proj_set "$ROOT" account "$acct"; vc proj_set "$ROOT" id "$pid"; vc proj_set "$ROOT" name "$pname"
     ok "this folder now publishes to “${pname}” in “${acct}”"
@@ -311,11 +322,7 @@ main(){
 
   # publish from a copy outside the repo: no .git above it, so Vercel attaches no commit
   stage="$(mktemp -d -t shipsite)"; trap 'rm -rf "$stage" "${log:-}"' EXIT
-  cp -R "$ROOT/dist/." "$stage/" || die "could not copy dist/"
-  [ -f "$ROOT/vercel.json" ] && cp "$ROOT/vercel.json" "$stage/vercel.json"
-  [ -f "$stage/vercel.json" ] || printf '{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}' > "$stage/vercel.json"
-  mkdir -p "$stage/.vercel"
-  printf '{"projectId":"%s","orgId":"%s","projectName":"%s"}' "$pid" "$(vc acct_get "$acct" org_id)" "$pname" > "$stage/.vercel/project.json"
+  stage_dist "$ROOT" "$stage" "$pid" "$(vc acct_get "$acct" org_id)" "$pname" || die "could not copy dist/"
 
   step "Publishing"
   row "account" "$acct  ${D}$(vc acct_get "$acct" scope)${R}"
