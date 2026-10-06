@@ -42,16 +42,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tool
 ```
 
 ```
-◆  developer-tools 1.0.0  pick a tool
+◆  developer-tools 1.0.0
 
-     Tools  · ↑↓ move · Enter picks · q quits
-   ❯ ship-apk    build a Flutter APK, upload it to appho.st, mail the link   not installed
-     ship-site   build a Vite site, publish dist/ to Vercel, copy the link   installed 1.0.0
-     install or update everything
+  ▸ What do you want to do
+     ↑↓ move · Enter picks · q quits
+   ❯ run a tool            without installing anything
+     install or update     put tools in /usr/local/bin
+     remove                take tools out of /usr/local/bin
      quit
 ```
 
-Pick a tool to run it, install it, update it or remove it. Running works even when nothing is installed; it fetches the latest release. Install the hub itself so you can type `developer-tools` any time:
+**Run a tool** lists them and runs the one you pick, fetching the latest release if it is not installed. **Install or update** shows every tool ticked: press Enter for all, or untick with space first. **Remove** works the same way. Install the hub itself so you can type `developer-tools` any time:
 
 ```sh
 brew install azharbinanwar/tap/developer-tools      # hub plus every tool

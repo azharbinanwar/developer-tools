@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# developer-tools: the hub. One menu to run, install, update or remove every tool.
+# developer-tools: the hub. Run any tool online, or install, update and remove them.
 #
 #   bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tools/main/developer-tools)
 #
@@ -26,36 +26,48 @@ TOOLS=(ship-apk ship-site)
 NOTES=("build a Flutter APK, upload it to appho.st, mail the link"
        "build a Vite site, publish dist/ to Vercel, copy the link")
 
-menu_pick(){ # $1 title, rest items -> echoes chosen index. ↑↓ or j/k move, Enter picks, q quits
-  local title="$1"; shift
-  local items=("$@") n=$# sel=0 k rest i saved
+# ── menus ─────────────────────────────────────────────────────────────────
+# pick:  one item, Enter picks            -> echoes the index
+# tick:  many items, space toggles, Enter -> echoes the ticked indexes, space separated
+_keys(){ # shared key loop; $1 mode (pick|tick), rest items. Uses SEL and TICK arrays.
+  local mode="$1"; shift
+  local items=("$@") n=$# k rest i saved hint
+  [ "$mode" = tick ] && hint="↑↓ move · space toggles · Enter continues · q quits" || hint="↑↓ move · Enter picks · q quits"
   saved="$(stty -g 2>/dev/null || true)"
   [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null; trap 'stty "$saved" 2>/dev/null; exit 130' INT; }
-  printf "     ${D}%s  · ↑↓ move · Enter picks · q quits${R}\n" "$title" >&2
+  printf "     ${D}%s${R}\n" "$hint" >&2
   for ((i=0;i<n;i++)); do printf '\n' >&2; done
   while :; do
     printf "\033[%dA" "$n" >&2
     for ((i=0;i<n;i++)); do
-      [ "$i" -eq "$sel" ] && printf "\r\033[K     ${A}❯ %s${R}\n" "${items[$i]}" >&2 \
-                          || printf "\r\033[K       ${D}%s${R}\n" "${items[$i]}" >&2
+      local box=""
+      [ "$mode" = tick ] && { [ "${TICK[$i]}" = 1 ] && box="${G}[x]${R} " || box="${D}[ ]${R} "; }
+      [ "$i" -eq "$SEL" ] && printf "\r\033[K     ${A}❯${R} %s${B}%s${R}\n" "$box" "${items[$i]}" >&2 \
+                           || printf "\r\033[K       %s${D}%s${R}\n" "$box" "${items[$i]}" >&2
     done
     IFS= read -rsn1 k 2>/dev/null || break
     case "$k" in
       '')    break ;;
+      ' ')   [ "$mode" = tick ] && { [ "${TICK[$SEL]}" = 1 ] && TICK[$SEL]=0 || TICK[$SEL]=1; } ;;
       $'\e') IFS= read -rsn2 rest 2>/dev/null || rest=""
-             case "$rest" in "[A") sel=$(((sel-1+n)%n)) ;; "[B") sel=$(((sel+1)%n)) ;; esac ;;
-      k|K)   sel=$(((sel-1+n)%n)) ;;
-      j|J)   sel=$(((sel+1)%n)) ;;
+             case "$rest" in "[A") SEL=$(((SEL-1+n)%n)) ;; "[B") SEL=$(((SEL+1)%n)) ;; esac ;;
+      k|K)   SEL=$(((SEL-1+n)%n)) ;;
+      j|J)   SEL=$(((SEL+1)%n)) ;;
       q|Q)   [ -n "$saved" ] && stty "$saved" 2>/dev/null; printf "\n" >&2; exit 0 ;;
     esac
   done
   [ -n "$saved" ] && { trap - INT; stty "$saved" 2>/dev/null; }
-  printf '%s' "$sel"
+}
+pick(){ SEL=0; _keys pick "$@"; printf '%s' "$SEL"; }
+tick(){ # all ticked by default
+  local i; TICK=(); for ((i=0;i<$#;i++)); do TICK+=(1); done
+  SEL=0; _keys tick "$@"
+  for ((i=0;i<$#;i++)); do [ "${TICK[$i]}" = 1 ] && printf '%s ' "$i"; done
 }
 
-status(){ # $1 tool -> "installed 1.0.0" or "not installed"
-  command -v "$1" >/dev/null 2>&1 && printf 'installed %s' "$("$1" --version 2>/dev/null | awk '{print $2}')" || printf 'not installed'
-}
+# ── tools ─────────────────────────────────────────────────────────────────
+status(){ command -v "$1" >/dev/null 2>&1 && printf 'installed %s' "$("$1" --version 2>/dev/null | awk '{print $2}')" || printf 'not installed'; }
+label(){ printf '%-11s %-56s %s' "${TOOLS[$1]}" "${NOTES[$1]}" "$(status "${TOOLS[$1]}")"; }
 
 install_tool(){ # $1 tool -> downloads the latest release into BIN
   local t="$1" tmp
@@ -64,38 +76,19 @@ install_tool(){ # $1 tool -> downloads the latest release into BIN
   bash -n "$tmp" || { rm -f "$tmp"; die "$t downloaded broken, not installing it"; }
   sudo mkdir -p "$BIN" && sudo install -m 755 "$tmp" "$BIN/$t" || { rm -f "$tmp"; die "could not write $BIN/$t"; }
   rm -f "$tmp"
-  ok "$t $("$BIN/$t" --version 2>/dev/null | awk '{print $2}') → $BIN/$t"
+  ok "$t $("$BIN/$t" --version 2>/dev/null | awk '{print $2}')  ${D}→ $BIN/$t${R}"
 }
-
+install_picked(){ # $@ indexes
+  local i
+  [ $# -gt 0 ] || { printf "     ${D}nothing ticked, nothing installed${R}\n" >&2; return; }
+  step "Installing to $BIN  ${D}(asks for your Mac password once)${R}"
+  for i in "$@"; do install_tool "${TOOLS[$i]}"; done
+  case ":$PATH:" in *":$BIN:"*) ;; *) printf "     ${Y}!${R} add %s to your PATH to run them by name\n" "$BIN" >&2 ;; esac
+}
 run_tool(){ # $1 tool -> installed copy if any, otherwise the latest release from GitHub
-  local t="$1"
   printf "\n" >&2
-  if command -v "$t" >/dev/null 2>&1; then exec "$t"; fi
-  exec bash <(curl -fsSL "$BASE/$t")
-}
-
-tool_menu(){ # $1 index
-  local i="$1" t="${TOOLS[$1]}" c
-  while :; do
-    step "$t  ${D}$(status "$t")${R}"
-    printf "     ${D}%s${R}\n" "${NOTES[$i]}" >&2
-    if command -v "$t" >/dev/null 2>&1; then
-      c="$(menu_pick "What to do" "run it" "update to the latest release" "remove it" "← back")"
-      case "$c" in
-        0) run_tool "$t" ;;
-        1) install_tool "$t" ;;
-        2) sudo rm -f "$BIN/$t" && ok "removed $t  ${D}(settings in ~/.config/$t are kept)${R}" ;;
-        3) return ;;
-      esac
-    else
-      c="$(menu_pick "What to do" "run it without installing" "install it" "← back")"
-      case "$c" in
-        0) run_tool "$t" ;;
-        1) install_tool "$t" ;;
-        2) return ;;
-      esac
-    fi
-  done
+  command -v "$1" >/dev/null 2>&1 && exec "$1"
+  exec bash <(curl -fsSL "$BASE/$1")
 }
 
 main(){
@@ -103,33 +96,43 @@ main(){
     --version|-V) echo "developer-tools $VERSION"; exit 0 ;;
     -h|--help)
       printf "\n  ${B}developer-tools${R} ${D}%s${R}\n\n" "$VERSION"
-      printf "    ${A}developer-tools${R}              menu: run, install, update or remove any tool\n"
+      printf "    ${A}developer-tools${R}              menu: run a tool, install, update or remove tools\n"
       printf "    ${A}developer-tools install${R}      install or update every tool, no questions\n"
       printf "    ${A}developer-tools <tool>${R}       run one tool (ship-apk, ship-site)\n\n"
       printf "  ${D}Tools install to %s and keep their settings in ~/.config/<tool>/${R}\n\n" "$BIN"
       exit 0 ;;
-    install)
-      banner "developer-tools $VERSION" "installing everything"
-      for t in "${TOOLS[@]}"; do install_tool "$t"; done
-      case ":$PATH:" in *":$BIN:"*) ;; *) printf "     ${Y}!${R} add %s to your PATH to run them by name\n" "$BIN" >&2 ;; esac
-      printf "\n" >&2; exit 0 ;;
+    install) banner "developer-tools $VERSION" "installing everything"
+             install_picked $(seq 0 $(( ${#TOOLS[@]} - 1 ))); printf "\n" >&2; exit 0 ;;
     "") ;;
-    *) for t in "${TOOLS[@]}"; do [ "$1" = "$t" ] && { shift; run_tool "$t" "$@"; }; done
+    *) for t in "${TOOLS[@]}"; do [ "$1" = "$t" ] && run_tool "$t"; done
        die "no tool called “$1” — try: developer-tools --help" ;;
   esac
   [ -t 0 ] || die "developer-tools needs a terminal — run it, do not pipe into it"
 
-  banner "developer-tools $VERSION" "pick a tool"
-  local items=() i c
+  banner "developer-tools $VERSION"
+  local items i c installed
   while :; do
-    items=()
-    for ((i=0;i<${#TOOLS[@]};i++)); do items+=("$(printf '%-11s %-56s %s' "${TOOLS[$i]}" "${NOTES[$i]}" "$(status "${TOOLS[$i]}")")"); done
-    items+=("install or update everything" "quit")
-    printf "\n" >&2
-    c="$(menu_pick "Tools" "${items[@]}")"
-    if   [ "$c" -eq ${#TOOLS[@]} ]; then for t in "${TOOLS[@]}"; do install_tool "$t"; done
-    elif [ "$c" -eq $(( ${#TOOLS[@]} + 1 )) ]; then printf "\n" >&2; exit 0
-    else tool_menu "$c"; fi
+    step "What do you want to do"
+    c="$(pick "run a tool            ${D}without installing anything${R}" \
+               "install or update     ${D}put tools in $BIN${R}" \
+               "remove                ${D}take tools out of $BIN${R}" \
+               "quit")"
+    case "$c" in
+      0) step "Run"
+         items=(); for ((i=0;i<${#TOOLS[@]};i++)); do items+=("$(label $i)"); done; items+=("← back")
+         c="$(pick "${items[@]}")"; [ "$c" -lt ${#TOOLS[@]} ] && run_tool "${TOOLS[$c]}" ;;
+      1) step "Install or update  ${D}everything is ticked, untick what you do not want${R}"
+         items=(); for ((i=0;i<${#TOOLS[@]};i++)); do items+=("$(label $i)"); done
+         install_picked $(tick "${items[@]}") ;;
+      2) installed=(); items=()
+         for ((i=0;i<${#TOOLS[@]};i++)); do command -v "${TOOLS[$i]}" >/dev/null 2>&1 && { installed+=("$i"); items+=("$(label $i)"); }; done
+         [ ${#installed[@]} -gt 0 ] || { printf "     ${D}nothing is installed${R}\n" >&2; continue; }
+         step "Remove  ${D}everything is ticked, untick what you want to keep${R}"
+         for i in $(tick "${items[@]}"); do
+           sudo rm -f "$BIN/${TOOLS[${installed[$i]}]}" && ok "removed ${TOOLS[${installed[$i]}]}  ${D}(settings in ~/.config are kept)${R}"
+         done ;;
+      3) printf "\n" >&2; exit 0 ;;
+    esac
   done
 }
 
