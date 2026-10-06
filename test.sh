@@ -96,8 +96,11 @@ echo "── ship-site"
   printf 'abc\n' > "$HOME/.config/ship-site/accounts/tok/token"; printf '{"token":"xyz"}' > "$HOME/.config/ship-site/accounts/web/auth.json"
   check "acct_token: pasted token"            is "$(acct_token tok)" abc
   check "acct_token: browser login auth.json" is "$(acct_token web)" xyz
-  check "acct_cli: token flag"                is "$(acct_cli tok)" "--token abc"
-  check "acct_cli: global-config for logins"  is "$(acct_cli web)" "--global-config $HOME/.config/ship-site/accounts/web"
+  acct_cli tok;  check "acct_cli: token flag"                is "${AUTH[*]}" "--token abc"
+  acct_cli web;  check "acct_cli: global-config for logins"  is "${AUTH[*]}" "--global-config $HOME/.config/ship-site/accounts/web"
+  mkdir -p "$HOME/.config/ship-site/accounts/Mohsin Dev"
+  acct_cli "Mohsin Dev"
+  check "acct_cli: a space in the name stays one argument" is "${#AUTH[@]}" 2
   check "slugify"                             is "$(slugify "My Site_v2!")" my-site-v2
   p="$(mktemp -d)"; mkdir -p "$p/src/deep" "$p/dist"; : > "$p/package.json"; : > "$p/dist/index.html"
   check "find_root walks up to package.json"  is "$(cd "$p/src/deep" && find_root)" "$p"

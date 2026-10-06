@@ -136,9 +136,10 @@ acct_token(){ # $1 name -> echoes the token
   [ -f "$dir/token" ] && { cat "$dir/token"; return; }
   [ -f "$dir/auth.json" ] && python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("token",""))' "$dir/auth.json"
 }
-acct_cli(){ # $1 name -> echoes the auth flags for the vercel cli (token shown masked by show_cmd)
+AUTH=()
+acct_cli(){ # $1 name -> fills AUTH with the vercel cli flags, as an array so a space in the name survives
   local dir="$ACCTS/$1"
-  [ -f "$dir/token" ] && printf -- '--token %s' "$(cat "$dir/token")" || printf -- '--global-config %s' "$dir"
+  [ -f "$dir/token" ] && AUTH=(--token "$(cat "$dir/token")") || AUTH=(--global-config "$dir")
 }
 
 add_account(){ # -> echoes the new account name
@@ -329,9 +330,10 @@ main(){
   row "project" "$pname"
   row "target" "$([ "$PROD" = yes ] && echo 'main website' || echo 'test version')"
   [ "$PROD" = yes ] && flag="--prod" || flag=""
-  cmd "vercel deploy --yes $flag $(acct_cli "$acct" | sed 's/--token .*/--token ••••/')  ${D}(from a temp copy of dist/)${R}"
+  acct_cli "$acct"
+  cmd "vercel deploy --yes $flag $([ "${AUTH[0]}" = --token ] && echo '--token ••••' || printf '%s "%s"' "${AUTH[0]}" "${AUTH[1]}")  ${D}(from a temp copy of dist/)${R}"
   log="$(mktemp -t shipsite-deploy)"
-  url="$(cd "$stage" && vercel deploy --yes $flag $(acct_cli "$acct") 2> >(tee "$log" >&2))" || fail "Vercel rejected the deploy — nothing was published" "$log"
+  url="$(cd "$stage" && vercel deploy --yes $flag "${AUTH[@]}" 2> >(tee "$log" >&2))" || fail "Vercel rejected the deploy — nothing was published" "$log"
   [ -n "$url" ] || fail "Vercel finished but returned no URL" "$log"
   if [ "$PROD" = yes ]; then
     domain="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)"; [ -n "$domain" ] && [ "${domain#ERR}" = "$domain" ] && url="https://$domain"
