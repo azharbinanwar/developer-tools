@@ -55,12 +55,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tool
 **Run a tool** lists them and runs the one you pick, fetching the latest release if it is not installed. **Install or update** shows every tool ticked: press Enter for all, or untick with space first. **Remove** works the same way. Install the hub itself so you can type `developer-tools` any time:
 
 ```sh
+brew trust azharbinanwar/tap                        # once, Homebrew 7 asks this of every third-party tap
 brew install azharbinanwar/tap/developer-tools      # hub plus every tool
 ```
 
 ### Option B: Homebrew, one tool
 
 ```sh
+brew trust azharbinanwar/tap                        # once
 brew install azharbinanwar/tap/ship-apk
 brew install azharbinanwar/tap/ship-site
 ```
