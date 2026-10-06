@@ -19,7 +19,7 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.0.2"
+VERSION="1.0.3"
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
 sub(){ printf "     ${D}%s${R}\n" "$1" >&2; }
@@ -255,7 +255,7 @@ main(){
       --prod|--production) PROD=yes ;;
       --preview)           PROD=no ;;
       accounts)            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "accounts"; accounts_menu; exit 0 ;;
-      --version|-V)        echo "ship-site $VERSION"; exit 0 ;;
+      --version|-V|-v)        echo "ship-site $VERSION"; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-site${R} ${D}%s${R}\n\n" "$VERSION"
         printf "    ${A}ship-site${R}             build this Vite project and publish dist/ to Vercel\n"
