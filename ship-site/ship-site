@@ -315,6 +315,7 @@ main(){
     [ "$(menu_pick "Publish to" 0)" = 0 ] && PROD=yes || PROD=no
   fi
 
+  stage="$(mktemp -d -t shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
   step "Building"
   cmd "cd $ROOT && $pm run build"
   log="$stage-build.log"
@@ -322,7 +323,6 @@ main(){
   [ -f "$ROOT/dist/index.html" ] || die "no dist/index.html after the build — is the Vite outDir something else?"
 
   # publish from a copy outside the repo: no .git above it, so Vercel attaches no commit
-  stage="$(mktemp -d -t shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
   stage_dist "$ROOT" "$stage" "$pid" "$(vc acct_get "$acct" org_id)" "$pname" || die "could not copy dist/"
 
   step "Publishing"
