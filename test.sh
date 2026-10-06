@@ -7,6 +7,8 @@ bash -n ship-site/ship-site
 bash -n developer-tools
 bash -n homebrew/render
 bash -n test-release.sh
+# bash 3.2 reads “$var” as a variable named var” → unbound; always write ${var}”
+! grep -nE '\$[A-Za-z_][A-Za-z_0-9]*”' ship-apk/ship-apk ship-site/ship-site developer-tools
 bash ship-apk/ship-apk --help >/dev/null
 bash ship-site/ship-site --help >/dev/null
 bash developer-tools --help >/dev/null
