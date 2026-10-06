@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# render <version> <asset base url> <out dir>
+# Fills url, version, sha256 and the --version test into each formula template.
+# Used by the release workflow and by test-release.sh, so both produce the same files.
+set -euo pipefail
+v="$1"; base="$2"; out="$3"
+here="$(cd "$(dirname "$0")" && pwd)"
+mkdir -p "$out"
+for t in ship-apk ship-site developer-tools; do
+  src="$here/../$t/$t"; [ -f "$src" ] || src="$here/../$t"
+  sha="$(shasum -a 256 "$src" | cut -d' ' -f1)"
+  sed -e "s|^  url .*|  url \"$base/$t\"|" \
+      -e "s|^  sha256 .*|  sha256 \"$sha\"|" \
+      -e "s|^  version .*|  version \"$v\"|" \
+      -e "s|$t [0-9.]*\", shell_output|$t $v\", shell_output|" \
+      "$here/$t.rb" > "$out/$t.rb"
+done

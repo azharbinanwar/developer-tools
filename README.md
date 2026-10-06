@@ -1,75 +1,123 @@
-# Developer Tools
+# developer-tools
 
-Two existing terminal tools, preserved unchanged:
+[![test](https://github.com/azharbinanwar/developer-tools/actions/workflows/test.yml/badge.svg)](https://github.com/azharbinanwar/developer-tools/actions/workflows/test.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-| Command | Purpose |
+Small terminal tools for macOS. Each one is a single file with no dependencies beyond what it drives. Use them one by one, or through the `developer-tools` hub that runs, installs and updates all of them from one menu.
+
+| Tool | What it does | Needs |
+| --- | --- | --- |
+| [ship-apk](ship-apk/README.md) | Build a Flutter APK, upload it to appho.st, mail the link to testers | flutter or fvm |
+| [ship-site](ship-site/README.md) | Build a Vite site, publish `dist/` to Vercel, copy the link | node |
+
+---
+
+## 1. Try it, nothing installed
+
+Open Terminal in your project folder and paste the line for the tool you want, or the hub to pick from a menu:
+
+```sh
+# ship-apk, inside a Flutter project
+bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tools/main/ship-apk/ship-apk)
+
+# ship-site, inside a Vite project
+bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tools/main/ship-site/ship-site)
+
+# the hub, from anywhere
+bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tools/main/developer-tools)
+```
+
+Nothing lands on your Mac except your settings (see [Where settings live](#where-settings-live)). You always get the newest code.
+
+---
+
+## 2. Install it
+
+After installing you just type `ship-apk` or `ship-site` from any folder.
+
+### Option A: the hub
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tools/main/developer-tools)
+```
+
+```
+◆  developer-tools 1.0.0  pick a tool
+
+     Tools  · ↑↓ move · Enter picks · q quits
+   ❯ ship-apk    build a Flutter APK, upload it to appho.st, mail the link   not installed
+     ship-site   build a Vite site, publish dist/ to Vercel, copy the link   installed 1.0.0
+     install or update everything
+     quit
+```
+
+Pick a tool to run it, install it, update it or remove it. Running works even when nothing is installed; it fetches the latest release. Install the hub itself so you can type `developer-tools` any time:
+
+```sh
+brew install azharbinanwar/tap/developer-tools      # hub plus every tool
+```
+
+### Option B: Homebrew, one tool
+
+```sh
+brew install azharbinanwar/tap/ship-apk
+brew install azharbinanwar/tap/ship-site
+```
+
+`brew upgrade` updates, `brew uninstall` removes.
+
+### Option C: one tool, one line
+
+```sh
+sudo curl -fsSL https://github.com/azharbinanwar/developer-tools/releases/latest/download/ship-apk -o /usr/local/bin/ship-apk && sudo chmod +x /usr/local/bin/ship-apk
+```
+
+Swap `ship-apk` for `ship-site` to get the other one. Run again to update, `sudo rm /usr/local/bin/ship-apk` to remove.
+
+### Which one?
+
+All three install the same files. Want everything: the hub. Want one tool: Homebrew or the one-liner. Each tool works on its own, the hub is a convenience.
+
+---
+
+## Where settings live
+
+| Tool | Settings |
 | --- | --- |
-| [make-a-build](make-a-build/README.md) | Flutter APK builds, appho.st uploads and optional email |
-| [deploy-it](deploy-it/README.md) | React + Vite builds and Vercel publishing |
+| ship-apk | `~/.config/ship-apk/config.json` plus send logs in `logs/` |
+| ship-site | `~/.config/ship-site/<project>.json` |
 
-No GitHub Actions, extra app or new tool. macOS is the current reference platform.
+Trying it online and installing it share the same settings, so you can start one way and switch later. Nothing is ever written into your project folder. Credentials are stored with mode 0600; keep that folder private.
 
-## Local installation
+---
 
-Requires Bash and Python 3, plus the requirements in each tool guide. Replace YOUR_USERNAME once the repository is published.
+## Test
 
-    git clone https://github.com/YOUR_USERNAME/developer-tools.git "$HOME/developer-tools"
-    mkdir -p "$HOME/.local/bin"
-    ln -s "$HOME/developer-tools/make-a-build/make-a-build" "$HOME/.local/bin/make-a-build"
-    ln -s "$HOME/developer-tools/deploy-it/deploy-it" "$HOME/.local/bin/deploy-it"
+```sh
+./test.sh
+```
 
-Install only the desired tool by creating only its symlink. Existing commands are not overwritten: if one exists, keep it or deliberately remove its symlink before linking the new installation.
+Syntax-checks every script, runs `--help`, and exercises the config store and mail rendering in a throwaway home folder. The same test runs in GitHub Actions on every push.
 
-For deploy-it, install Node.js/npm and the Vercel CLI:
+## Releases
 
-    npm install --prefix "$HOME/developer-tools/deploy-it/runtime" --save-exact vercel@62.4.0
+Rehearse first, on your Mac, with no tag and nothing pushed:
 
-Add this to ~/.zshrc or your shell startup file, then start a new terminal:
+```sh
+./test-release.sh
+```
 
-    export PATH="$HOME/.local/bin:$PATH"
+It renders the Homebrew formulas from the local scripts, really installs them with `brew`, checks `--version`, uninstalls, and with `TAP_TOKEN` exported also proves the token can push to the tap. Then:
 
-## Direct execution from GitHub
+1. Bump `VERSION` in all three scripts and commit.
+2. `git tag v1.0.0 && git push origin v1.0.0`
 
-See each tool guide for fetch-and-run commands without cloning. GitHub hosts the code; execution happens locally. Downloading files is still necessary. Persistent local folders retain settings between runs.
+The release workflow runs the tests, refuses a tag that does not match `VERSION`, attaches the three scripts, writes the release notes from the commits since the last tag, and pushes updated formulas to the Homebrew tap. The full runbook is in [RELEASE.md](RELEASE.md).
 
-Download first, then launch normally so menus can read your terminal. Piping source into Bash can interfere with interactive input; deploy-it also requires its supporting Python files. Review code before execution. For reproducibility, replace main with a reviewed commit or tag.
+## Contributing
 
-## Personal data
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the rules and the repo layout, and [RELEASE.md](RELEASE.md) for how a release is cut.
 
-No user credentials, configuration, history or logs are included. Users enter their own values through the existing menus.
+## License
 
-The unchanged scripts save data next to their installed files:
-
-- make-a-build: config.json and logs/; may adopt an existing ~/.apphost.
-- deploy-it: config.json, accounts/, history.jsonl and logs/.
-
-These paths and runtime dependencies are ignored by Git. Keep the installation private and never force-add ignored files. Credentials are plaintext locally, not encrypted. deploy-it protects token files with mode 0600 and account directories with 0700. Do not expose config files or logs publicly.
-
-Your existing installed commands and account files remain in their original folders. This repository does not migrate settings automatically. Copy personal settings only into your own private installation if you choose to migrate later.
-
-## Update and uninstall
-
-For a clone:
-
-    git -C "$HOME/developer-tools" pull --ff-only
-
-For direct downloads, repeat the fetch step. Settings are retained. Review changes before running updated code.
-
-Remove only the symlinks you created to uninstall:
-
-    rm "$HOME/.local/bin/make-a-build" "$HOME/.local/bin/deploy-it"
-
-Keep the installation folder to retain settings. Delete it separately only if you want to erase local credentials and logs too.
-
-## Validation and contributions
-
-    bash -n make-a-build/make-a-build
-    bash -n deploy-it/deploy-it
-    cd deploy-it
-    python3 -m unittest discover -s tests -v
-
-Keep contributions focused on these tools; exclude all personal and generated files.
-
-## Publication
-
-GitHub owner and URL are not selected yet; commands intentionally contain placeholders. Choose a license before inviting external reuse. No license has been assumed. Publication is a separate step.
+MIT. See [LICENSE](LICENSE).

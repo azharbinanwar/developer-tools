@@ -1,0 +1,44 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./test.sh
+      - name: tag must match the VERSION in every script
+        run: |
+          for f in ship-apk/ship-apk ship-site/ship-site developer-tools; do
+            grep -q "^VERSION=\"${GITHUB_REF_NAME#v}\"" "$f" || { echo "$f is not at $GITHUB_REF_NAME"; exit 1; }
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ship-apk/ship-apk
+            ship-site/ship-site
+            developer-tools
+          generate_release_notes: true
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: azharbinanwar/homebrew-tap
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+      - name: render formulas with the release sha256 and push them to the tap
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          homebrew/render "$v" "https://github.com/azharbinanwar/developer-tools/releases/download/v$v" tap/Formula
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula
+          git diff --cached --quiet || { git commit -m "developer-tools v$v"; git push; }
