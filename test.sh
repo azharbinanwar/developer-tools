@@ -29,5 +29,12 @@ grep -q "fixed login" <<<"$mail"
 grep -q $'^DRY\t2$' <<<"$mail"
 cfg proj_del demo
 [ -z "$(cfg projects)" ]
+
+# ship-site config store, same throwaway HOME
+( source ship-site/ship-site
+  vc acct_set me scope azhar; vc acct_set me org_id u1; vc proj_set /tmp/x name demo
+  [ "$(vc accounts)" = me ]; [ "$(vc proj_get /tmp/x name)" = demo ]
+  [ "$(stat -f '%Lp' "$HOME/.config/ship-site/config.json")" = 600 ]
+  vc acct_del me; [ -z "$(vc accounts)" ] )
 rm -rf "$HOME"
 echo "all good"

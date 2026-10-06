@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # ship-site: build a Vite site, publish only the dist folder to Vercel, copy the link.
 #
-# One file. The Vercel CLI does the auth, the upload and the project linking;
-# this script only remembers which Vercel project each folder belongs to, in
-# ~/.config/ship-site, so a fresh dist/ never creates a project by accident.
+# One file. Accounts are named and signed in either with a token or through
+# the Vercel browser login; each keeps its own CLI session under
+# ~/.config/ship-site/accounts/<name>. Projects are listed from the account and
+# picked or created by name, never guessed. The deploy runs from a temp copy of
+# dist/ outside your git repo, so no commit info is attached, and the copy is
+# removed afterwards.
 #
-# Needs node and the Vercel CLI; it asks before installing either one that is missing.
+# Needs node, python3 and the Vercel CLI; it asks before installing node or the CLI.
 #
 # License: MIT.
 
@@ -16,28 +19,92 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.0.1"
+VERSION="1.0.2"
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
+sub(){ printf "     ${D}%s${R}\n" "$1" >&2; }
 ok(){ printf "     ${G}✓${R} %s\n" "$1" >&2; }
+warn(){ printf "     ${Y}!${R} %s\n" "$1" >&2; }
 die(){ printf "\n  ${E}${B}✗ %s${R}\n" "$1" >&2; exit 1; }
 row(){ printf "     ${D}%-11s${R} %s\n" "$1" "$2" >&2; }
+cmd(){ printf "     ${D}\$${R} %s\n" "$1" >&2; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 
 CONF="$HOME/.config/ship-site"
+CONFIG="$CONF/config.json"
+ACCTS="$CONF/accounts"
 
-menu_pick(){ # $1 title, rest items -> echoes chosen index. ↑↓ or j/k move, Enter picks
-  local title="$1"; shift
-  local items=("$@") n=$# sel=0 k rest i saved
+# ── config + vercel api ───────────────────────────────────────────────────
+# One python block owns config.json and talks to api.vercel.com; bash only asks it for lines.
+vc(){
+python3 - "$CONFIG" "$@" <<'PY'
+import json, os, sys, urllib.request, urllib.error, urllib.parse
+
+path, op = sys.argv[1], sys.argv[2]
+a = sys.argv[3:]
+try: d = json.load(open(path))
+except Exception: d = {}
+d.setdefault("accounts", {}); d.setdefault("projects", {})
+
+def save():
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
+
+def api(token, team, method, ep, body=None):
+    if team and team != "-": ep += ("&" if "?" in ep else "?") + urllib.parse.urlencode({"teamId": team})
+    req = urllib.request.Request("https://api.vercel.com" + ep, method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read(); return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        try: msg = json.loads(e.read()).get("error", {}).get("message", str(e))
+        except Exception: msg = str(e)
+        print("ERR\t" + msg); sys.exit(1)
+    except urllib.error.URLError as e:
+        print("ERR\tcannot reach Vercel: %s" % e.reason); sys.exit(1)
+
+def pages(token, team, ep, key):
+    out, until = [], None
+    while True:
+        r = api(token, team, "GET", ep + ("&until=%s" % until if until else ""))
+        out += r.get(key, [])
+        until = r.get("pagination", {}).get("next")
+        if not until: return out
+
+# config
+if   op == "accounts":  [print(n) for n in sorted(d["accounts"])]
+elif op == "acct_get":  print(d["accounts"].get(a[0], {}).get(a[1], ""))
+elif op == "acct_set":  d["accounts"].setdefault(a[0], {})[a[1]] = a[2]; save()
+elif op == "acct_del":  d["accounts"].pop(a[0], None); save()
+elif op == "proj_get":  print(d["projects"].get(a[0], {}).get(a[1], ""))
+elif op == "proj_set":  d["projects"].setdefault(a[0], {})[a[1]] = a[2]; save()
+# vercel
+elif op == "user":      u = api(a[0], "-", "GET", "/v2/user")["user"]; print("%s\t%s" % (u["id"], u.get("username") or u.get("name", "")))
+elif op == "teams":     [print("%s\t%s\t%s" % (t["id"], t["slug"], t.get("name", t["slug"]))) for t in pages(a[0], "-", "/v2/teams?limit=100", "teams")]
+elif op == "projects":  [print("%s\t%s" % (p["id"], p["name"])) for p in sorted(pages(a[0], a[1], "/v9/projects?limit=100", "projects"), key=lambda p: p["name"])]
+elif op == "create":    p = api(a[0], a[1], "POST", "/v10/projects", {"name": a[2], "framework": None}); print("%s\t%s" % (p["id"], p["name"]))
+elif op == "domain":    # the stable production domain of a project, if any
+    ds = [x["name"] for x in pages(a[0], a[1], "/v9/projects/%s/domains?limit=100" % a[2], "domains") if not x.get("gitBranch") and not x.get("redirect")]
+    print(next((x for x in ds if not x.endswith(".vercel.app")), ds[0] if ds else ""))
+else: sys.exit(2)
+PY
+}
+
+# ── menus and prompts ─────────────────────────────────────────────────────
+MENU_ITEMS=(); MENU_NOTES=()
+menu_pick(){ # $1 title  $2 start index -> echoes chosen index
+  local title="$1" n=${#MENU_ITEMS[@]} sel="$2" k rest i saved
   saved="$(stty -g 2>/dev/null || true)"
   [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null; trap 'stty "$saved" 2>/dev/null; exit 130' INT; }
-  printf "     ${D}%s  · ↑↓ move · Enter picks${R}\n" "$title" >&2
+  printf "     ${D}%s  · ↑↓ move · Enter picks · q quits${R}\n" "$title" >&2
   for ((i=0;i<n;i++)); do printf '\n' >&2; done
   while :; do
     printf "\033[%dA" "$n" >&2
     for ((i=0;i<n;i++)); do
-      [ "$i" -eq "$sel" ] && printf "\r\033[K     ${A}❯ %s${R}\n" "${items[$i]}" >&2 \
-                          || printf "\r\033[K       ${D}%s${R}\n" "${items[$i]}" >&2
+      if [ "$i" -eq "$sel" ]; then printf "\r\033[K     ${A}❯ %s${R}%s\n" "${MENU_ITEMS[$i]}" "${MENU_NOTES[$i]:-}" >&2
+      else                         printf "\r\033[K       ${D}%s${R}%s\n" "${MENU_ITEMS[$i]}" "${MENU_NOTES[$i]:-}" >&2; fi
     done
     IFS= read -rsn1 k 2>/dev/null || break
     case "$k" in
@@ -46,38 +113,143 @@ menu_pick(){ # $1 title, rest items -> echoes chosen index. ↑↓ or j/k move, 
              case "$rest" in "[A") sel=$(((sel-1+n)%n)) ;; "[B") sel=$(((sel+1)%n)) ;; esac ;;
       k|K)   sel=$(((sel-1+n)%n)) ;;
       j|J)   sel=$(((sel+1)%n)) ;;
+      q|Q)   [ -n "$saved" ] && stty "$saved" 2>/dev/null; printf "\n" >&2; exit 0 ;;
     esac
   done
   [ -n "$saved" ] && { trap - INT; stty "$saved" 2>/dev/null; }
   printf '%s' "$sel"
 }
+ask(){ local r; printf "     ${A}%s${R} ${D}[%s]${R} ${A}›${R} " "$1" "${2:-none}" >&2; read -r r; printf '%s' "${r:-$2}"; }
+ask_secret(){ local r; printf "     ${A}%s${R} ${A}›${R} " "$1" >&2; stty -echo 2>/dev/null; read -r r; stty echo 2>/dev/null; printf '\n' >&2; printf '%s' "$r"; }
 
-find_root(){ # walk up from $PWD until a package.json shows up
-  local d="$PWD"
-  while [ "$d" != "/" ]; do [ -f "$d/package.json" ] && { printf '%s' "$d"; return; }; d="$(dirname "$d")"; done
-  return 1
+# ── accounts ──────────────────────────────────────────────────────────────
+# Every account ends up with a token on disk: pasted ones in accounts/<name>/token,
+# browser logins in the CLI's own accounts/<name>/auth.json. Same API path after that.
+acct_token(){ # $1 name -> echoes the token
+  local dir="$ACCTS/$1"
+  [ -f "$dir/token" ] && { cat "$dir/token"; return; }
+  [ -f "$dir/auth.json" ] && python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("token",""))' "$dir/auth.json"
+}
+acct_cli(){ # $1 name -> echoes the auth flags for the vercel cli (token shown masked by show_cmd)
+  local dir="$ACCTS/$1"
+  [ -f "$dir/token" ] && printf -- '--token %s' "$(cat "$dir/token")" || printf -- '--global-config %s' "$dir"
 }
 
+add_account(){ # -> echoes the new account name
+  local name dir token user teams idx r
+  step "Add a Vercel account"
+  name="$(ask "A name for it (your name, or the team)" "")"; [ -n "$name" ] || return 1
+  case "$name" in */*|.*) warn "no slashes or leading dots"; return 1 ;; esac
+  [ -z "$(vc acct_get "$name" org_id)" ] || { warn "“$name” exists already — pick it from the list"; return 1; }
+  dir="$ACCTS/$name"; mkdir -p "$dir"; chmod 700 "$ACCTS" "$dir"
+  MENU_ITEMS=("sign in with Vercel in the browser" "paste a token")
+  MENU_NOTES=("  ${D}opens vercel.com, nothing to copy${R}" "  ${D}from vercel.com/account/tokens${R}")
+  if [ "$(menu_pick "How" 0)" = 0 ]; then
+    cmd "vercel login --global-config $dir"
+    vercel login --global-config "$dir" >&2 || { rm -rf "$dir"; die "sign-in did not finish"; }
+    rm -f "$dir/token"
+  else
+    sub "create one at https://vercel.com/account/tokens, then paste it here (hidden)"
+    token="$(ask_secret "Token")"; [ -n "$token" ] || { rm -rf "$dir"; return 1; }
+    printf '%s\n' "$token" > "$dir/token"; chmod 600 "$dir/token"
+  fi
+  token="$(acct_token "$name")"; [ -n "$token" ] || { rm -rf "$dir"; die "no token came back"; }
+  user="$(vc user "$token")" || { rm -rf "$dir"; die "${user#ERR	}"; }
+  ok "signed in as ${user#*	}"
+
+  # scope: personal, or one of the teams the account belongs to
+  teams="$(vc teams "$token")" || die "${teams#ERR	}"
+  vc acct_set "$name" scope "${user#*	}"; vc acct_set "$name" org_id "${user%%	*}"; vc acct_set "$name" team_id ""
+  if [ -n "$teams" ]; then
+    MENU_ITEMS=("personal  ${user#*	}"); MENU_NOTES=("")
+    while IFS=$'\t' read -r id slug tname; do MENU_ITEMS+=("team      $tname"); MENU_NOTES+=("  ${D}$slug${R}"); done <<<"$teams"
+    step "Which scope does “$name” deploy to"
+    idx="$(menu_pick "Scope" 0)"
+    if [ "$idx" -gt 0 ]; then
+      r="$(sed -n "${idx}p" <<<"$teams")"
+      vc acct_set "$name" team_id "$(cut -f1 <<<"$r")"; vc acct_set "$name" org_id "$(cut -f1 <<<"$r")"; vc acct_set "$name" scope "$(cut -f2 <<<"$r")"
+    fi
+  fi
+  ok "saved “$name”  ${D}→ $(vc acct_get "$name" scope)${R}"
+  printf '%s' "$name"
+}
+
+pick_account(){ # -> echoes an account name
+  local names=() n idx
+  while :; do
+    names=(); MENU_ITEMS=(); MENU_NOTES=()
+    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); MENU_ITEMS+=("$(printf '%-16s' "$n")"); MENU_NOTES+=("  ${D}$(vc acct_get "$n" scope)${R}"); }; done < <(vc accounts)
+    MENU_ITEMS+=("+ add an account"); MENU_NOTES+=("  ${D}browser sign-in or a token${R}")
+    step "Vercel account"
+    idx="$(menu_pick "Which account" 0)"
+    if [ "$idx" -eq ${#names[@]} ]; then n="$(add_account)" && { printf '%s' "$n"; return; }
+    else printf '%s' "${names[$idx]}"; return; fi
+  done
+}
+
+accounts_menu(){
+  local names=() n idx
+  while :; do
+    names=(); MENU_ITEMS=(); MENU_NOTES=()
+    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); MENU_ITEMS+=("$(printf '%-16s' "$n")"); MENU_NOTES+=("  ${D}$(vc acct_get "$n" scope)  · $([ -f "$ACCTS/$n/token" ] && echo token || echo 'browser sign-in')${R}"); }; done < <(vc accounts)
+    MENU_ITEMS+=("+ add an account" "← quit"); MENU_NOTES+=("" "")
+    step "Accounts"
+    idx="$(menu_pick "Which account" 0)"
+    if   [ "$idx" -eq $(( ${#names[@]} + 1 )) ]; then return
+    elif [ "$idx" -eq ${#names[@]} ]; then add_account >/dev/null; continue; fi
+    n="${names[$idx]}"
+    MENU_ITEMS=("remove it" "← back"); MENU_NOTES=("  ${D}forgets the sign-in on this Mac, nothing changes on Vercel${R}" "")
+    step "$n"
+    [ "$(menu_pick "What to do" 1)" = 0 ] && { vc acct_del "$n"; rm -rf "$ACCTS/$n"; ok "removed “$n”"; }
+  done
+}
+
+# ── projects ──────────────────────────────────────────────────────────────
+pick_project(){ # $1 account  $2 suggested name -> echoes "id<TAB>name"
+  local acct="$1" token team list ids=() names=() idx pname r
+  token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
+  step "Vercel projects in “$acct”  ${D}$(vc acct_get "$acct" scope)${R}"
+  list="$(vc projects "$token" "${team:--}")" || die "${list#ERR	}"
+  MENU_ITEMS=(); MENU_NOTES=()
+  while IFS=$'\t' read -r id pname; do [ -n "$id" ] && { ids+=("$id"); names+=("$pname"); MENU_ITEMS+=("$pname"); MENU_NOTES+=(""); }; done <<<"$list"
+  MENU_ITEMS+=("+ create a new project"); MENU_NOTES+=("  ${D}you type the name${R}")
+  idx=0; for i in "${!names[@]}"; do [ "${names[$i]}" = "$2" ] && idx=$i; done
+  idx="$(menu_pick "Which project" "$idx")"
+  if [ "$idx" -lt ${#ids[@]} ]; then printf '%s\t%s' "${ids[$idx]}" "${names[$idx]}"; return; fi
+  while :; do
+    pname="$(ask "New project name" "$2")"; [ -n "$pname" ] || return 1
+    pname="$(printf '%s' "$pname" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//')"
+    r="$(vc create "$token" "${team:--}" "$pname")" && { ok "created “${r#*	}”"; printf '%s' "$r"; return; }
+    warn "${r#ERR	}"
+  done
+}
+
+find_root(){ local d="$PWD"; while [ "$d" != "/" ]; do [ -f "$d/package.json" ] && { printf '%s' "$d"; return; }; d="$(dirname "$d")"; done; return 1; }
+
+# ── main ──────────────────────────────────────────────────────────────────
 main(){
-  local PROD="" ROOT="" arg name slug pm dist link flag url
+  local PROD="" ROOT="" arg name pm acct proj pid pname token team stage url flag domain
   for arg in "$@"; do
     case "$arg" in
       --prod|--production) PROD=yes ;;
       --preview)           PROD=no ;;
+      accounts)            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "accounts"; accounts_menu; exit 0 ;;
       --version|-V)        echo "ship-site $VERSION"; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-site${R} ${D}%s${R}\n\n" "$VERSION"
         printf "    ${A}ship-site${R}             build this Vite project and publish dist/ to Vercel\n"
         printf "    ${A}ship-site --prod${R}      straight to the main website, no question asked\n"
         printf "    ${A}ship-site --preview${R}   a fresh preview URL\n"
-        printf "    ${A}ship-site ~/site${R}      a project folder other than the current one\n\n"
-        printf "  ${D}First run per project asks Vercel to link or create it; later runs remember.\n"
-        printf "  Links live in %s${R}\n\n" "$CONF"
+        printf "    ${A}ship-site ~/site${R}      a project folder other than the current one\n"
+        printf "    ${A}ship-site accounts${R}    add or remove Vercel accounts\n\n"
+        printf "  ${D}Accounts sign in with a token or the Vercel browser login. Projects are listed\n"
+        printf "  from the account and picked or created by name. Settings live in %s${R}\n\n" "$CONF"
         exit 0 ;;
       *) ROOT="${arg/#\~/$HOME}" ;;
     esac
   done
   [ -t 0 ] || die "ship-site needs a terminal — run it, do not pipe into it"
+  have python3 || die "python3 is required (it ships with macOS developer tools)"
   need(){ # $1 what  $2 how to check  $3 install command -> asks, installs, or dies with the command
     have "$2" && return
     printf "     ${Y}!${R} %s is not installed\n     ${A}Install it now with  %s${R} ${D}(y/n) [yes]${R} ${A}›${R} " "$1" "$3" >&2
@@ -91,45 +263,65 @@ main(){
   ROOT="$(cd "$ROOT" && pwd)"
   [ -f "$ROOT/package.json" ] || die "no package.json in $ROOT"
   name="$(node -p "require('$ROOT/package.json').name||''" 2>/dev/null)"; name="${name:-$(basename "$ROOT")}"
-  slug="$(printf '%s' "$name" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//')"
   if   [ -f "$ROOT/pnpm-lock.yaml" ]; then pm=pnpm
   elif [ -f "$ROOT/yarn.lock" ];      then pm=yarn
   elif [ -f "$ROOT/bun.lock" ] || [ -f "$ROOT/bun.lockb" ]; then pm=bun
   else pm=npm; fi
-  dist="$ROOT/dist"
 
   banner "ship-site $VERSION" "build it, publish it, copy the link"
   step "Project"
   row "folder" "$ROOT"
   row "name" "$name"
-  row "build" "$pm run build"
+
+  # account + project: remembered per folder, changeable every run
+  acct="$(vc proj_get "$ROOT" account)"; pid="$(vc proj_get "$ROOT" id)"; pname="$(vc proj_get "$ROOT" name)"
+  [ -n "$acct" ] && [ -z "$(vc acct_get "$acct" org_id)" ] && acct=""
+  if [ -n "$acct" ] && [ -n "$pid" ]; then
+    row "account" "$acct  ${D}$(vc acct_get "$acct" scope)${R}"
+    row "project" "$pname"
+    MENU_ITEMS=("publish to this project" "change account or project"); MENU_NOTES=("" "")
+    [ "$(menu_pick "Target" 0)" = 1 ] && acct=""
+  fi
+  if [ -z "$acct" ] || [ -z "$pid" ]; then
+    acct="$(pick_account)" || die "no account"
+    proj="$(pick_project "$acct" "$(printf '%s' "$name" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g')")" || die "no project picked"
+    pid="${proj%%	*}"; pname="${proj#*	}"
+    vc proj_set "$ROOT" account "$acct"; vc proj_set "$ROOT" id "$pid"; vc proj_set "$ROOT" name "$pname"
+    ok "this folder now publishes to “$pname” in “$acct”"
+  fi
+  token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
 
   if [ -z "$PROD" ]; then
     step "Where"
-    [ "$(menu_pick "Publish to" "main website   — updates production" "test version   — a new preview URL")" = 0 ] && PROD=yes || PROD=no
+    MENU_ITEMS=("main website" "test version"); MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}")
+    [ "$(menu_pick "Publish to" 0)" = 0 ] && PROD=yes || PROD=no
   fi
-  vercel whoami >/dev/null 2>&1 || { step "Sign in to Vercel"; vercel login >&2 || die "not signed in"; }
 
   step "Building"
+  cmd "cd $ROOT && $pm run build"
   ( cd "$ROOT" && $pm run build ) >&2 || die "the build failed — nothing was published"
-  [ -f "$dist/index.html" ] || die "no dist/index.html after the build — is the Vite outDir something else?"
+  [ -f "$ROOT/dist/index.html" ] || die "no dist/index.html after the build — is the Vite outDir something else?"
+
+  # publish from a copy outside the repo: no .git above it, so Vercel attaches no commit
+  stage="$(mktemp -d -t shipsite)"; trap 'rm -rf "$stage"' EXIT
+  cp -R "$ROOT/dist/." "$stage/" || die "could not copy dist/"
+  [ -f "$ROOT/vercel.json" ] && cp "$ROOT/vercel.json" "$stage/vercel.json"
+  [ -f "$stage/vercel.json" ] || printf '{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}' > "$stage/vercel.json"
+  mkdir -p "$stage/.vercel"
+  printf '{"projectId":"%s","orgId":"%s","projectName":"%s"}' "$pid" "$(vc acct_get "$acct" org_id)" "$pname" > "$stage/.vercel/project.json"
 
   step "Publishing"
-  # vercel keeps its project link in <dir>/.vercel; vite wipes dist/ each build,
-  # so stash the link in CONF and put it back before every deploy.
-  link="$CONF/$slug.json"; mkdir -p "$CONF" "$dist/.vercel"
-  if [ -f "$link" ]; then cp "$link" "$dist/.vercel/project.json"
-  else ( cd "$dist" && vercel link --project "$slug" --yes ) >&2 || die "could not link a Vercel project"; fi
-  cp "$dist/.vercel/project.json" "$link"
-  if [ -f "$ROOT/vercel.json" ]; then cp "$ROOT/vercel.json" "$dist/vercel.json"
-  elif [ ! -f "$dist/vercel.json" ]; then printf '{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}' > "$dist/vercel.json"; fi
-
-  [ "$PROD" = yes ] && flag=--prod || flag=""
-  url="$(cd "$dist" && vercel deploy --yes $flag)" || die "Vercel rejected the deploy — see the output above"
-  [ "$PROD" = yes ] && url="https://$(node -p "require('$link').projectName").vercel.app"   # ponytail: stable URL = <project>.vercel.app; custom domains show in vercel's own output above
+  row "account" "$acct  ${D}$(vc acct_get "$acct" scope)${R}"
+  row "project" "$pname"
+  row "target" "$([ "$PROD" = yes ] && echo 'main website' || echo 'test version')"
+  [ "$PROD" = yes ] && flag="--prod" || flag=""
+  cmd "vercel deploy --yes $flag $(acct_cli "$acct" | sed 's/--token .*/--token ••••/')  ${D}(from a temp copy of dist/)${R}"
+  url="$(cd "$stage" && vercel deploy --yes $flag $(acct_cli "$acct"))" || die "Vercel rejected the deploy — see the output above"
+  if [ "$PROD" = yes ]; then
+    domain="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)"; [ -n "$domain" ] && [ "${domain#ERR}" = "$domain" ] && url="https://$domain"
+  fi
   printf %s "$url" | pbcopy 2>/dev/null
   step "Published"
-  row "target" "$([ "$PROD" = yes ] && echo 'main website' || echo 'test version')"
   row "link" "${B}${A}${url}${R}  ${D}copied${R}"
   printf "\n" >&2
 }
