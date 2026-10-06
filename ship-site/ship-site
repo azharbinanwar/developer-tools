@@ -317,12 +317,12 @@ main(){
 
   step "Building"
   cmd "cd $ROOT && $pm run build"
-  log="$(mktemp -t shipsite-build)"
+  log="$stage-build.log"
   ( cd "$ROOT" && $pm run build ) > >(tee "$log" >&2) 2>&1 || { fail "the build failed — nothing was published" "$log"; }
   [ -f "$ROOT/dist/index.html" ] || die "no dist/index.html after the build — is the Vite outDir something else?"
 
   # publish from a copy outside the repo: no .git above it, so Vercel attaches no commit
-  stage="$(mktemp -d -t shipsite)"; trap 'rm -rf "$stage" "${log:-}"' EXIT
+  stage="$(mktemp -d -t shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
   stage_dist "$ROOT" "$stage" "$pid" "$(vc acct_get "$acct" org_id)" "$pname" || die "could not copy dist/"
 
   step "Publishing"
@@ -332,7 +332,7 @@ main(){
   [ "$PROD" = yes ] && flag="--prod" || flag=""
   acct_cli "$acct"
   cmd "vercel deploy --yes $flag $([ "${AUTH[0]}" = --token ] && echo '--token ••••' || printf '%s "%s"' "${AUTH[0]}" "${AUTH[1]}")  ${D}(from a temp copy of dist/)${R}"
-  log="$(mktemp -t shipsite-deploy)"
+  log="$stage-deploy.log"
   url="$(cd "$stage" && vercel deploy --yes $flag "${AUTH[@]}" 2> >(tee "$log" >&2))" || fail "Vercel rejected the deploy — nothing was published" "$log"
   [ -n "$url" ] || fail "Vercel finished but returned no URL" "$log"
   if [ "$PROD" = yes ]; then
