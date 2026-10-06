@@ -34,7 +34,7 @@ Commit title should say what changed for users, it becomes the release notes. `/
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The release workflow then: tests, checks the tag, publishes the GitHub release with `ship-apk`, `ship-site` and `developer-tools` attached, writes notes from the commits since the last tag, and pushes the filled-in formulas to the tap.
+The release workflow then: tests, checks the tag, publishes the GitHub release with `ship-apk`, `ship-site` and `developer-tools` attached, writes the notes from commit titles since the previous tag (so write titles a user would want to read), and pushes the filled-in formulas to the tap.
 
 ## 6. Verify
 

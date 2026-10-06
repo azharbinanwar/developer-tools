@@ -9,19 +9,30 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: ./test.sh
       - name: tag must match the VERSION in every script
         run: |
           for f in ship-apk/ship-apk ship-site/ship-site developer-tools; do
             grep -q "^VERSION=\"${GITHUB_REF_NAME#v}\"" "$f" || { echo "$f is not at $GITHUB_REF_NAME"; exit 1; }
           done
+      - name: release notes from commit titles since the previous tag
+        run: |
+          prev="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          { echo "## What changed"; echo
+            git log --no-merges --format='- %s' ${prev:+$prev..}"$GITHUB_REF_NAME"
+            echo; echo "## Install"; echo
+            echo '```sh'; echo 'brew install azharbinanwar/tap/developer-tools'; echo '```'
+            echo; echo "Or run without installing: see the [README](https://github.com/azharbinanwar/developer-tools#readme)."
+          } > notes.md
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             ship-apk/ship-apk
             ship-site/ship-site
             developer-tools
-          generate_release_notes: true
+          body_path: notes.md
 
   homebrew:
     needs: release
