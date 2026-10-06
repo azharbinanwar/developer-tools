@@ -29,6 +29,12 @@ die(){ printf "\n  ${E}${B}✗ %s${R}\n" "$1" >&2; exit 1; }
 row(){ printf "     ${D}%-11s${R} %s\n" "$1" "$2" >&2; }
 cmd(){ printf "     ${D}\$${R} %s\n" "$1" >&2; }
 have(){ command -v "$1" >/dev/null 2>&1; }
+fail(){ # $1 message  $2 log file -> repeats the error lines from the log, then dies
+  local l; printf "\n" >&2
+  warn "$1"
+  grep -i 'error\|fail\|denied\|not found\|cannot' "$2" 2>/dev/null | tail -6 | while IFS= read -r l; do sub "$l"; done
+  die "stopped — full output is above"
+}
 
 CONF="$HOME/.config/ship-site"
 CONFIG="$CONF/config.json"
@@ -228,7 +234,7 @@ find_root(){ local d="$PWD"; while [ "$d" != "/" ]; do [ -f "$d/package.json" ] 
 
 # ── main ──────────────────────────────────────────────────────────────────
 main(){
-  local PROD="" ROOT="" arg name pm acct proj pid pname token team stage url flag domain
+  local PROD="" ROOT="" arg name pm acct proj pid pname token team stage url flag domain log
   for arg in "$@"; do
     case "$arg" in
       --prod|--production) PROD=yes ;;
@@ -299,11 +305,12 @@ main(){
 
   step "Building"
   cmd "cd $ROOT && $pm run build"
-  ( cd "$ROOT" && $pm run build ) >&2 || die "the build failed — nothing was published"
+  log="$(mktemp -t shipsite-build)"
+  ( cd "$ROOT" && $pm run build ) > >(tee "$log" >&2) 2>&1 || { fail "the build failed — nothing was published" "$log"; }
   [ -f "$ROOT/dist/index.html" ] || die "no dist/index.html after the build — is the Vite outDir something else?"
 
   # publish from a copy outside the repo: no .git above it, so Vercel attaches no commit
-  stage="$(mktemp -d -t shipsite)"; trap 'rm -rf "$stage"' EXIT
+  stage="$(mktemp -d -t shipsite)"; trap 'rm -rf "$stage" "${log:-}"' EXIT
   cp -R "$ROOT/dist/." "$stage/" || die "could not copy dist/"
   [ -f "$ROOT/vercel.json" ] && cp "$ROOT/vercel.json" "$stage/vercel.json"
   [ -f "$stage/vercel.json" ] || printf '{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}' > "$stage/vercel.json"
@@ -316,7 +323,9 @@ main(){
   row "target" "$([ "$PROD" = yes ] && echo 'main website' || echo 'test version')"
   [ "$PROD" = yes ] && flag="--prod" || flag=""
   cmd "vercel deploy --yes $flag $(acct_cli "$acct" | sed 's/--token .*/--token ••••/')  ${D}(from a temp copy of dist/)${R}"
-  url="$(cd "$stage" && vercel deploy --yes $flag $(acct_cli "$acct"))" || die "Vercel rejected the deploy — see the output above"
+  log="$(mktemp -t shipsite-deploy)"
+  url="$(cd "$stage" && vercel deploy --yes $flag $(acct_cli "$acct") 2> >(tee "$log" >&2))" || fail "Vercel rejected the deploy — nothing was published" "$log"
+  [ -n "$url" ] || fail "Vercel finished but returned no URL" "$log"
   if [ "$PROD" = yes ]; then
     domain="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)"; [ -n "$domain" ] && [ "${domain#ERR}" = "$domain" ] && url="https://$domain"
   fi
