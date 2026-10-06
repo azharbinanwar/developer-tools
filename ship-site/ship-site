@@ -146,7 +146,7 @@ add_account(){ # -> echoes the new account name
   step "Add a Vercel account"
   name="$(ask "A name for it (your name, or the team)" "")"; [ -n "$name" ] || return 1
   case "$name" in */*|.*) warn "no slashes or leading dots"; return 1 ;; esac
-  [ -z "$(vc acct_get "$name" org_id)" ] || { warn "“$name” exists already — pick it from the list"; return 1; }
+  [ -z "$(vc acct_get "$name" org_id)" ] || { warn "“${name}” exists already — pick it from the list"; return 1; }
   dir="$ACCTS/$name"; mkdir -p "$dir"; chmod 700 "$ACCTS" "$dir"
   MENU_ITEMS=("sign in with Vercel in the browser" "paste a token")
   MENU_NOTES=("  ${D}opens vercel.com, nothing to copy${R}" "  ${D}from vercel.com/account/tokens${R}")
@@ -169,14 +169,14 @@ add_account(){ # -> echoes the new account name
   if [ -n "$teams" ]; then
     MENU_ITEMS=("personal  ${user#*	}"); MENU_NOTES=("")
     while IFS=$'\t' read -r id slug tname; do MENU_ITEMS+=("team      $tname"); MENU_NOTES+=("  ${D}$slug${R}"); done <<<"$teams"
-    step "Which scope does “$name” deploy to"
+    step "Which scope does “${name}” deploy to"
     idx="$(menu_pick "Scope" 0)"
     if [ "$idx" -gt 0 ]; then
       r="$(sed -n "${idx}p" <<<"$teams")"
       vc acct_set "$name" team_id "$(cut -f1 <<<"$r")"; vc acct_set "$name" org_id "$(cut -f1 <<<"$r")"; vc acct_set "$name" scope "$(cut -f2 <<<"$r")"
     fi
   fi
-  ok "saved “$name”  ${D}→ $(vc acct_get "$name" scope)${R}"
+  ok "saved “${name}”  ${D}→ $(vc acct_get "$name" scope)${R}"
   printf '%s' "$name"
 }
 
@@ -206,7 +206,7 @@ accounts_menu(){
     n="${names[$idx]}"
     MENU_ITEMS=("remove it" "← back"); MENU_NOTES=("  ${D}forgets the sign-in on this Mac, nothing changes on Vercel${R}" "")
     step "$n"
-    [ "$(menu_pick "What to do" 1)" = 0 ] && { vc acct_del "$n"; rm -rf "$ACCTS/$n"; ok "removed “$n”"; }
+    [ "$(menu_pick "What to do" 1)" = 0 ] && { vc acct_del "$n"; rm -rf "$ACCTS/$n"; ok "removed “${n}”"; }
   done
 }
 
@@ -214,7 +214,7 @@ accounts_menu(){
 pick_project(){ # $1 account  $2 suggested name -> echoes "id<TAB>name"
   local acct="$1" token team list ids=() names=() idx pname r
   token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
-  step "Vercel projects in “$acct”  ${D}$(vc acct_get "$acct" scope)${R}"
+  step "Vercel projects in “${acct}”  ${D}$(vc acct_get "$acct" scope)${R}"
   list="$(vc projects "$token" "${team:--}")" || die "${list#ERR	}"
   MENU_ITEMS=(); MENU_NOTES=()
   while IFS=$'\t' read -r id pname; do [ -n "$id" ] && { ids+=("$id"); names+=("$pname"); MENU_ITEMS+=("$pname"); MENU_NOTES+=(""); }; done <<<"$list"
@@ -293,7 +293,7 @@ main(){
     proj="$(pick_project "$acct" "$(printf '%s' "$name" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g')")" || die "no project picked"
     pid="${proj%%	*}"; pname="${proj#*	}"
     vc proj_set "$ROOT" account "$acct"; vc proj_set "$ROOT" id "$pid"; vc proj_set "$ROOT" name "$pname"
-    ok "this folder now publishes to “$pname” in “$acct”"
+    ok "this folder now publishes to “${pname}” in “${acct}”"
   fi
   token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
 
