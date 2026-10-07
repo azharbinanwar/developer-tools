@@ -14,7 +14,7 @@ set -uo pipefail
 if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0); A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.0.3"
+VERSION="1.0.4"
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
 ok(){ printf "     ${G}✓${R} %s\n" "$1" >&2; }
@@ -83,6 +83,7 @@ install_picked(){ # $@ indexes
   [ $# -gt 0 ] || { printf "     ${D}nothing ticked, nothing installed${R}\n" >&2; return; }
   step "Installing to $BIN  ${D}(asks for your Mac password once)${R}"
   for i in "$@"; do install_tool "${TOOLS[$i]}"; done
+  install_tool developer-tools   # the hub itself, so `developer-tools` works next time
   case ":$PATH:" in *":$BIN:"*) ;; *) printf "     ${Y}!${R} add %s to your PATH to run them by name\n" "$BIN" >&2 ;; esac
 }
 run_tool(){ # $1 tool -> installed copy if any, otherwise the latest release from GitHub
