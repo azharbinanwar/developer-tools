@@ -40,6 +40,10 @@ echo "── ship-apk"
   check "ask: Enter keeps the default"        is "$(ask x dflt <<<"" 2>/dev/null)" dflt
   check "ask: typed value wins"               is "$(ask x dflt <<<"typed" 2>/dev/null)" typed
   check "ask_yn: n → false"                   is "$(ask_yn x true <<<"n" 2>/dev/null)" false
+  check "ask_secret: typed value"             is "$(printf 'abc\n' | ask_secret p "" 2>/dev/null)" abc
+  check "ask_secret: backspace removes a char" is "$(printf 'ab\177c\n' | ask_secret p "" 2>/dev/null)" ac
+  check "ask_secret: Enter keeps saved value"  is "$(printf '\n' | ask_secret p old 2>/dev/null)" old
+  check "ask_secret: shows a star per char"    is "$(printf 'xyz\n' | ask_secret p "" 2>&1 >/dev/null | tr -cd '*')" "***"
 
   cfg proj_set demo app "Demo App"; cfg proj_set demo app_id abc123
   cfg person_add demo Sam sam@example.com; cfg person_add demo QA qa@example.com bcc
@@ -56,6 +60,27 @@ echo "── ship-apk"
   check "mail: subject from template"         grep -q "Subject: Demo App 1.2.3" <<<"$mail"
   check "mail: notes included"                grep -q "fixed login" <<<"$mail"
   check "mail: counts To+BCC"                 grep -q $'^DRY\t2$' <<<"$mail"
+  cfg person_add demo "Lee" lee@example.com cc
+  mail="$(send_mail demo "Demo App" 1.2.3 https://appho.st/x "" yes)"
+  check "mail: CC line"                       grep -q "CC:      Lee <lee@example.com>" <<<"$mail"
+  check "mail: counts To+CC+BCC"              grep -q $'^DRY\t3$' <<<"$mail"
+  cfg person_del demo lee@example.com cc
+  check "smtp_guess: gmail"                   is "$(smtp_guess me@gmail.com)" "smtp.gmail.com 465"
+  check "smtp_guess: outlook uses 587"        is "$(smtp_guess me@Outlook.com)" "smtp-mail.outlook.com 587"
+  check "smtp_guess: own domain"              is "$(smtp_guess me@acme.io)" "smtp.acme.io 465"
+  # guided setup, answers piped in: To (address, name, blank), CC (blank), BCC (blank), subject
+  setup_app_mail fresh Fresh >/dev/null 2>&1 <<'ANS'
+amy@example.com
+Amy
+
+
+
+{app} is ready
+ANS
+  check "setup_app_mail: To saved"            is "$(cfg people fresh to)" "Amy	amy@example.com"
+  check "setup_app_mail: skipped CC is empty" is "$(cfg people fresh cc)" ""
+  check "setup_app_mail: subject saved"       is "$(cfg proj_get fresh subject)" "{app} is ready"
+  cfg proj_del fresh
   cfg proj_set empty app E
   check "mail: no recipients → NO_RECIPIENTS" is "$(send_mail empty E 1 l n yes)" NO_RECIPIENTS
   cfg proj_del demo; cfg proj_del empty
@@ -75,7 +100,13 @@ echo "── ship-apk"
   cfg proj_set demo last_sha "$(cd "$p" && git rev-parse HEAD~1)"
   check "git_notes: only since the last send" is "$(git_notes "$p" demo)" "- second"
   check "git_notes: not a repo → empty"       is "$(git_notes /tmp demo)" ""
-  cfg proj_del demo; rm -rf "$p"
+  cfg proj_set demo path "$p"; cfg proj_set other path /gone/away
+  load_projects /tmp; check "app list: no match outside an app"     is "$HIT" -1
+  load_projects "$p"; check "app list: this folder's app is found"  is "$HIT" 0
+  check "app list: rows reach the menu"         is "${#MENU_ITEMS[@]}" 2
+  check "app list: no recipients reads no mail" grep -q "no mail" <<<"${MENU_NOTES[0]}"
+  check "app list: missing folder is flagged"   grep -q "folder missing" <<<"${MENU_NOTES[1]}"
+  cfg proj_del demo; cfg proj_del other; rm -rf "$p"
 )
 
 echo "── ship-site"

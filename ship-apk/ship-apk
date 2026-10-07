@@ -16,7 +16,7 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.0.4"
+VERSION="1.0.5"
 RULE="────────────────────────────────────────────"
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
@@ -74,7 +74,7 @@ def proj(key):
 if op == "projects":
     for k in sorted(d["projects"]):
         p = d["projects"][k]
-        print("%s\t%s\t%s\t%s\t%d" % (k, p.get("path", ""), p.get("app", ""), p.get("app_id", ""), len(p.get("to", []))))
+        print("\x1f".join([k, p.get("path", ""), p.get("app", ""), p.get("app_id", ""), str(len(p.get("to", [])))]))
 elif op == "proj_get":   print(d["projects"].get(a[0], {}).get(a[1], ""))
 elif op == "proj_set":   proj(a[0])[a[1]] = a[2]; save()
 elif op == "proj_del":   d["projects"].pop(a[0], None); save()
@@ -131,23 +131,40 @@ menu_pick(){ # $1 title  $2 skip index (-1 for none)  $3 index to start on -> ec
 ask(){ # $1 label  $2 default -> prints default if the user just hits Enter
   local r; printf "     ${A}%s${R} ${D}[%s]${R} ${A}›${R} " "$1" "${2:-none}" >&2
   read -r r; printf '%s' "${r:-$2}"; }
-ask_secret(){ local r; printf "     ${A}%s${R} ${D}[%s]${R} ${A}›${R} " "$1" "${2:-none}" >&2
-  stty -echo 2>/dev/null; read -r r; stty echo 2>/dev/null; printf '\n' >&2
-  printf '%s' "${r:-$2}"; }
+ask_secret(){ # $1 label  $2 saved value -> one * per character typed; Enter on nothing keeps the saved value
+  local r="" c
+  printf "     ${A}%s${R} ${D}[%s]${R} ${A}›${R} " "$1" "$([ -n "${2:-}" ] && echo 'saved · Enter keeps it' || echo 'none')" >&2
+  while IFS= read -rsn1 c; do
+    case "$c" in
+      '')            break ;;
+      $'\177'|$'\b') [ -n "$r" ] && { r="${r%?}"; printf '\b \b' >&2; } ;;
+      *)             r="$r$c"; printf '*' >&2 ;;
+    esac
+  done
+  printf '\n' >&2
+  printf '%s' "${r:-${2:-}}"
+}
 ask_yn(){ local r d; [ "$2" = true ] && d="yes" || d="no"
   printf "     ${A}%s${R} ${D}(y/n) [%s]${R} ${A}›${R} " "$1" "$d" >&2
   read -r r; case "$r" in [yY]*) echo true ;; [nN]*) echo false ;; *) echo "$2" ;; esac; }
 
 PROJ_KEYS=(); PROJ_PATHS=()
-load_projects(){ PROJ_KEYS=(); PROJ_PATHS=(); MENU_ITEMS=(); MENU_NOTES=()
-  local gone
-  while IFS=$'\t' read -r k path app id n; do
+HIT=-1
+load_projects(){ # $1 current folder (optional) -> fills the app rows; HIT = row of that folder's app, or -1
+  local here="${1:-}" note mail k path app id n
+  HIT=-1
+  PROJ_KEYS=(); PROJ_PATHS=(); MENU_ITEMS=(); MENU_NOTES=()
+  while IFS=$'\x1f' read -r k path app id n; do   # \x1f, not a tab: bash collapses empty tab fields
     [ -n "$k" ] || continue
     PROJ_KEYS+=("$k"); PROJ_PATHS+=("$path")
-    [ -d "$path" ] && gone="" || gone="  ${Y}folder missing${R}"
+    if   [ -n "$here" ] && [ "$path" = "$here" ]; then note="  ${G}● this folder${R}"; HIT=$(( ${#PROJ_KEYS[@]} - 1 ))
+    elif [ ! -d "$path" ]; then note="  ${Y}folder missing${R}"
+    else note="  ${D}$(sed "s|^$HOME|~|" <<<"$path")${R}"; fi
+    [ "$n" -gt 0 ] && mail="$n $([ "$n" = 1 ] && echo person || echo people)" || mail="no mail"
     MENU_ITEMS+=("$(printf '%-22s' "${app:-$k}")")
-    MENU_NOTES+=("  ${D}To: ${n}${R}$gone")
-  done < <(cfg projects); }
+    MENU_NOTES+=("  ${D}$(printf '%-12s %-11s' "${id:0:10}" "$mail")${R}$note")
+  done < <(cfg projects)
+}
 
 # ── project detection ─────────────────────────────────────────────────────
 # Walks up from the working directory; a pubspec.yaml is what makes it a project.
@@ -248,7 +265,10 @@ p = d["projects"].get(key, {})
 def people(f):
     return [r for r in p.get(f, []) if r.get("email", "").strip()]
 to = people("to")
-bcc = [r["email"].strip() for r in people("bcc") if r["email"].strip() not in {t["email"].strip() for t in to}]
+seen = {t["email"].strip() for t in to}
+cc = [r for r in people("cc") if r["email"].strip() not in seen]
+seen |= {r["email"].strip() for r in cc}
+bcc = [r["email"].strip() for r in people("bcc") if r["email"].strip() not in seen]
 
 if not to:
     print("NO_RECIPIENTS"); sys.exit(0)
@@ -262,18 +282,20 @@ m = EmailMessage()
 m["Subject"] = (p.get("subject") or tpl["subject"]).format(**fields)
 m["From"] = formataddr((sender_name, s.get("user", "")))
 m["To"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in to)
+if cc: m["Cc"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in cc)
 m.set_content(tpl["body"].format(**fields))
 
 if dry:
     print("-" * 60)
     print("From:    " + m["From"])
     print("To:      " + m["To"])
+    if cc:  print("CC:      " + m["Cc"])
     if bcc: print("BCC:     " + ", ".join(bcc) + "   (hidden — nobody sees these)")
     print("Subject: " + m["Subject"])
     print()
     print(m.get_content())
     print("-" * 60)
-    print("DRY\t%d" % (len(to) + len(bcc)))
+    print("DRY\t%d" % (len(to) + len(cc) + len(bcc)))
     sys.exit(0)
 
 port = int(s.get("port") or 465)
@@ -284,11 +306,11 @@ try:
         server = smtplib.SMTP(s["host"], port, timeout=30)
         server.starttls(context=ssl.create_default_context())
     server.login(s["user"], s["password"])
-    refused = server.send_message(m, to_addrs=[r["email"].strip() for r in to] + bcc)
+    refused = server.send_message(m, to_addrs=[r["email"].strip() for r in to + cc] + bcc)
     server.quit()
 except Exception as e:
     print("FAIL\t" + str(e).replace("\n", " ")); sys.exit(1)
-print("OK\t%d\t%s" % (len(to) + len(bcc) - len(refused), "; ".join(refused)))
+print("OK\t%d\t%s" % (len(to) + len(cc) + len(bcc) - len(refused), "; ".join(refused)))
 PY
 }
 
@@ -359,73 +381,103 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
 }
 
 # ── ship ──────────────────────────────────────────────────────────────────
-ship(){ # $1 project key  $2 root
-  local key="$1" root="$2" apk name version notes idx result count fails want_mail n
+# The flow is: pick the build, settle mail (send, set it up, or skip), then
+# build, upload and mail unattended, then a done menu. Nothing asks mid-run.
+ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
+  local key="$1" root="$2" apk name version notes idx result count fails want_mail n ready apkdir
+  [ -f "$root/pubspec.yaml" ] || { warn "“${key}” points at ${root}, which has no pubspec.yaml — fix the folder under edit an app"; return 0; }
   version="$(proj_version "$root")"
   name="$(cfg proj_get "$key" app)"; [ -n "$name" ] || name="$key"
-  [ -n "$(cfg proj_get "$key" app_id)" ] || { warn "“${key}” has no app id yet"; project_menu "$key" || return; }
-  [ -n "$(cfg proj_get "$key" app_id)" ] || return
-  [ -n "$(cfg proj_get "$key" user_id)" ] && [ -n "$(cfg proj_get "$key" key)" ] || credentials "$key"
+  [ -n "$(cfg proj_get "$key" app_id)" ] || cfg proj_set "$key" app_id "$(ask "appho.st app id for “${name}”" "")"
+  [ -n "$(cfg proj_get "$key" app_id)" ] || { warn "no app id, nothing to upload to"; return 0; }
+  { [ -n "$(cfg proj_get "$key" user_id)" ] && [ -n "$(cfg proj_get "$key" key)" ]; } || credentials "$key"
 
-  # Everything that needs an answer is asked here, before the build starts, so
-  # the rest runs unattended. The choice becomes next time's default.
-  want_mail="$(cfg proj_get "$key" mail_default)"
-  case "$want_mail" in false|none|"") want_mail=no ;; *) want_mail=yes ;; esac
-  n="$(cfg people "$key" to | grep -c .)"
-  if [ "$n" -eq 0 ]; then
-    want_mail=no; warn "no email will be sent — To is empty (add people on the app screen)"
-  else
-    step "Email"
-    MENU_ITEMS=("send this email" "don't send an email this time")
-    MENU_NOTES=("  ${D}to $n $([ "$n" = 1 ] && echo person || echo people), after the upload${R}" "  ${D}still uploads and copies the link${R}")
-    [ "$want_mail" = yes ] && idx=0 || idx=1
-    [ "$(menu_pick "Email" 1 "$idx")" = 0 ] && want_mail=yes || want_mail=no
-    cfg proj_set "$key" mail_default "$want_mail"
-  fi
-  if [ "$want_mail" = yes ] && [ "$(cfg smtp_ready)" != yes ]; then
-    warn "no mail account is set up yet"; smtp_menu
-    [ "$(cfg smtp_ready)" = yes ] || want_mail=no
-  fi
+  printf "\n  ${D}%s${R}\n  ${B}%s${R}  ${D}%s${R}\n" "$RULE" "$name" "$version" >&2
 
+  # 1. which build
   apk="$(last_build "$root")"
   MENU_ITEMS=("build a fresh one"); MENU_NOTES=("  ${D}$(flutter_cmd "$root") build apk --release${R}")
   if [ -n "$apk" ]; then
     MENU_ITEMS+=("use the last build")
     MENU_NOTES+=("  ${D}$(date -r "$(stat -f '%m' "$apk")" '+%d %b %H:%M')  $(( $(stat -f '%z' "$apk") / 1048576 )) MB${R}")
   fi
-  MENU_ITEMS+=("← cancel"); MENU_NOTES+=("")
+  MENU_ITEMS+=("← back to apps"); MENU_NOTES+=("")
   step "Build"
   idx="$(menu_pick "Which build" $(( ${#MENU_ITEMS[@]} - 1 )) 0)"
-  [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 1 )) ] && return
-  [ "$idx" -eq 0 ] && { apk="$(build_apk "$root")" || return; }
-  [ -n "$apk" ] || return
+  [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 1 )) ] && return 0
+  local fresh=no; [ "$idx" -eq 0 ] && fresh=yes
 
-  # nothing below this line asks anything — walk away
-  do_upload "$apk" "$key" "$name" "$version" || return
+  # 2. mail: send, set up what is missing (mailbox, then this app's email), or skip
+  want_mail="$(cfg proj_get "$key" mail_default)"
+  case "$want_mail" in false|none|no) want_mail=no ;; *) want_mail=yes ;; esac
+  step "Email"
+  while :; do
+    n="$(cfg people "$key" to | grep -c .)"
+    if [ "$(cfg smtp_ready)" != yes ]; then
+      MENU_ITEMS=("set up mailbox" "skip mail this time")
+      MENU_NOTES=("  ${D}the address the link is sent from — once, for every app${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}")
+      [ "$(menu_pick "No mailbox yet" 1 0)" = 0 ] && { setup_mailbox; continue; }
+    elif [ "$n" -eq 0 ]; then
+      MENU_ITEMS=("set up this app's email" "skip mail this time")
+      MENU_NOTES=("  ${D}To, CC, BCC and subject for “${name}”${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}")
+      [ "$(menu_pick "Mailbox ready · nobody to send to yet" 1 0)" = 0 ] && { setup_app_mail "$key" "$name"; continue; }
+    else
+      MENU_ITEMS=("send the link to $n $([ "$n" = 1 ] && echo person || echo people)" "skip mail this time" "change To, CC, BCC or subject")
+      MENU_NOTES=("  ${D}$(cfg people "$key" to | cut -f2 | tr '\n' ' ')${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}" "")
+      [ "$want_mail" = yes ] && idx=0 || idx=1
+      case "$(menu_pick "Mail" 1 "$idx")" in
+        0) want_mail=yes; break ;;
+        2) setup_app_mail "$key" "$name"; continue ;;
+      esac
+    fi
+    want_mail=no; break
+  done
+  cfg proj_set "$key" mail_default "$want_mail"
 
-  [ "$want_mail" = yes ] || { log_send "$key" "$version" "$UPLOAD_LINK" "0 (link only)"; return; }
+  # 3. nothing below asks anything — walk away
+  if [ "$fresh" = yes ]; then apk="$(build_apk "$root")" || return 0; fi
+  [ -n "$apk" ] || return 0
+  do_upload "$apk" "$key" "$name" "$version" || return 0
 
-  notes="$(git_notes "$root" "$key")"
-  if [ "$DRY" = yes ]; then
-    step "Dry run — this is what would be sent"
-    send_mail "$key" "$name" "$version" "$UPLOAD_LINK" "$notes" yes
-    warn "dry run: nothing was mailed"
-    log_send "$key" "$version" "$UPLOAD_LINK" "0 (dry run)"
-    return
+  if [ "$want_mail" = no ]; then
+    log_send "$key" "$version" "$UPLOAD_LINK" "0 (link only)"
+  else
+    notes="$(git_notes "$root" "$key")"
+    if [ "$DRY" = yes ]; then
+      step "Dry run — this is what would be sent"
+      send_mail "$key" "$name" "$version" "$UPLOAD_LINK" "$notes" yes >&2
+      warn "dry run: nothing was mailed"
+      log_send "$key" "$version" "$UPLOAD_LINK" "0 (dry run)"
+    else
+      step "Sending"
+      result="$(send_mail "$key" "$name" "$version" "$UPLOAD_LINK" "$notes")"
+      case "$result" in
+        OK*) count="$(printf '%s' "$result" | cut -f2)"; fails="$(printf '%s' "$result" | cut -f3)"
+             ok "sent to $count address$([ "$count" = 1 ] || echo es)"
+             [ -n "$fails" ] && warn "failed: $fails"
+             cfg proj_set "$key" last_sha "$(head_sha "$root")"
+             log_send "$key" "$version" "$UPLOAD_LINK" "$count" ;;
+        NO_RECIPIENTS) warn "no recipients saved"; want_mail=no ;;
+        FAIL*) warn "could not send: $(printf '%s' "$result" | cut -f2)"
+               sub "check host, port, address and password under mailbox"; want_mail=no ;;
+      esac
+    fi
   fi
 
-  step "Sending"
-  result="$(send_mail "$key" "$name" "$version" "$UPLOAD_LINK" "$notes")"
-  case "$result" in
-    OK*) count="$(printf '%s' "$result" | cut -f2)"; fails="$(printf '%s' "$result" | cut -f3)"
-         ok "sent to $count address$([ "$count" = 1 ] || echo es)"
-         [ -n "$fails" ] && warn "failed: $fails"
-         cfg proj_set "$key" last_sha "$(head_sha "$root")"
-         log_send "$key" "$version" "$UPLOAD_LINK" "$count" ;;
-    NO_RECIPIENTS) warn "no recipients saved" ;;
-    FAIL*) warn "could not connect: $(printf '%s' "$result" | cut -f2)"
-           sub "check host, port, address and password under Mail account" ;;
-  esac
+  # 4. done — what next; when no mail went out, opening the APK folder comes first
+  apkdir="$(dirname "$apk")"
+  [ "$want_mail" = no ] && idx=0 || idx=2
+  while :; do
+    MENU_ITEMS=("open the APK folder" "open the link in the browser" "back to apps" "quit")
+    MENU_NOTES=("  ${D}$(sed "s|^$HOME|~|" <<<"$apkdir")${R}" "  ${D}${UPLOAD_LINK}${R}" "" "")
+    step "Done"
+    case "$(menu_pick "What next" 3 "$idx")" in
+      0) open "$apkdir" 2>/dev/null || warn "open $apkdir yourself"; idx=2 ;;
+      1) open "$UPLOAD_LINK" 2>/dev/null || warn "open $UPLOAD_LINK yourself"; idx=2 ;;
+      2) return 0 ;;
+      3) return 1 ;;
+    esac
+  done
 }
 
 log_send(){ # project · version · link · how many were mailed
@@ -451,39 +503,12 @@ add_app(){ # $1 folder (optional) -> echoes the new project key
   printf '%s' "$key"
 }
 
-# ── config menus ──────────────────────────────────────────────────────────
 credentials(){ # $1 project key
   step "appho.st credentials for “$1”"
   sub "both come from the app's page on appho.st › Private API › download config"
   cfg proj_set "$1" user_id "$(ask "user_id" "$(cfg proj_get "$1" user_id)")"
   cfg proj_set "$1" key     "$(ask "API key" "$(cfg proj_get "$1" key)")"
   ok "saved"
-}
-
-smtp_menu(){
-  local idx
-  while :; do
-    MENU_ITEMS=("$(printf '%-16s' 'address')"  "$(printf '%-16s' 'password')"
-                "$(printf '%-16s' 'smtp host')" "$(printf '%-16s' 'port')"
-                "$(printf '%-16s' 'from name')" "send a test to myself" "← back")
-    MENU_NOTES=("  ${D}$(cfg smtp_get user)${R}"
-                "  ${D}$([ -n "$(cfg smtp_get password)" ] && echo 'set' || echo 'not set yet')${R}"
-                "  ${D}$(cfg smtp_get host)${R}"
-                "  ${D}$(cfg smtp_get port)  · 465 for SSL, 587 for STARTTLS${R}"
-                "  ${D}$(cfg smtp_get from_name)  · the sender name people see${R}"
-                "  ${D}proves the settings work before a real send${R}" "")
-    step "Mail account"
-    idx="$(menu_pick "What to change" 6 0)"
-    case "$idx" in
-      0) cfg smtp_set user      "$(ask "Address" "$(cfg smtp_get user)")" ;;
-      1) cfg smtp_set password  "$(ask_secret "Password" "")" ; ok "saved" ;;
-      2) cfg smtp_set host      "$(ask "SMTP host" "$(cfg smtp_get host)")" ;;
-      3) cfg smtp_set port      "$(ask "Port" "$(cfg smtp_get port)")" ;;
-      4) cfg smtp_set from_name "$(ask "From name" "$(cfg smtp_get from_name)")" ;;
-      5) smtp_test ;;
-      6) return ;;
-    esac
-  done
 }
 
 smtp_test(){
@@ -505,7 +530,7 @@ smtp_test(){
 
 people_menu(){ # $1 project key  $2 to | bcc
   local key="$1" list="${2:-to}" idx n e names=() mails=() i label
-  [ "$list" = to ] && label=To || label=BCC
+  case "$list" in to) label=To ;; cc) label=CC ;; *) label=BCC ;; esac
   while :; do
     names=(); mails=(); MENU_ITEMS=(); MENU_NOTES=()
     while IFS=$'\t' read -r n e; do
@@ -516,7 +541,7 @@ people_menu(){ # $1 project key  $2 to | bcc
     MENU_ITEMS+=("+ add to $label"); MENU_NOTES+=("  ${D}name and address${R}")
     MENU_ITEMS+=("← back");         MENU_NOTES+=("")
     step "$label for “${key}”"
-    [ "$list" = to ] && sub "who the email is addressed to" || sub "hidden copy — nobody on the email can see these"
+    case "$list" in to) sub "who the email is addressed to" ;; cc) sub "copied openly — everyone on the email sees these" ;; *) sub "hidden copy — nobody on the email can see these" ;; esac
     idx="$(menu_pick "Who" $(( ${#MENU_ITEMS[@]} - 1 )) 0)"
     [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 1 )) ] && return
     if [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 2 )) ]; then
@@ -538,64 +563,111 @@ people_menu(){ # $1 project key  $2 to | bcc
   done
 }
 
-app_screen(){ # $1 project key -> returns when the user goes back to the list
-  local key="$1" name
+smtp_guess(){ # $1 address -> "host port" for the common providers, smtp.<domain> 465 otherwise
+  case "$(printf '%s' "${1##*@}" | tr 'A-Z' 'a-z')" in
+    gmail.com|googlemail.com)        echo "smtp.gmail.com 465" ;;
+    outlook.com|hotmail.com|live.com) echo "smtp-mail.outlook.com 587" ;;
+    icloud.com|me.com|mac.com)       echo "smtp.mail.me.com 587" ;;
+    yahoo.com)                       echo "smtp.mail.yahoo.com 465" ;;
+    zoho.com)                        echo "smtp.zoho.com 465" ;;
+    *)                               echo "smtp.${1##*@} 465" ;;
+  esac
+}
+
+setup_mailbox(){ # guided, one question at a time; the mailbox menu is for later edits
+  local user hp host port
+  step "Set up mailbox"
+  sub "the account ship-apk sends from, used by every app"
+  user="$(ask "Email address" "$(cfg smtp_get user)")"
+  case "$user" in ?*@?*.?*) ;; *) warn "“${user}” is not an email address"; return ;; esac
+  cfg smtp_set user "$user"
+  case "$user" in *@gmail.com|*@googlemail.com) sub "Gmail needs an app password: myaccount.google.com/apppasswords" ;; esac
+  cfg smtp_set password "$(ask_secret "Password" "$(cfg smtp_get password)")"
+  hp="$(smtp_guess "$user")"
+  host="$(ask "SMTP host" "$(cfg smtp_get host | grep . || echo "${hp% *}")")"; cfg smtp_set host "$host"
+  port="$(ask "Port (465 SSL, 587 STARTTLS)" "${hp#* }")"; cfg smtp_set port "$port"
+  cfg smtp_set from_name "$(ask "Name people see it from" "$(cfg smtp_get from_name | grep . || echo "${user%@*}")")"
+  ok "mailbox saved"
+  [ "$(ask_yn "Send a test to yourself now" true)" = true ] && smtp_test
+}
+
+setup_app_mail(){ # $1 key  $2 app name -> guided To, CC, BCC, subject
+  local key="$1" f label hint n e
+  step "Email for “$2”"
+  for f in to cc bcc; do
+    case "$f" in
+      to)  label=To;  hint="who the link is addressed to" ;;
+      cc)  label=CC;  hint="copied openly, everyone sees them — blank to skip" ;;
+      bcc) label=BCC; hint="hidden copy, nobody sees them — blank to skip" ;;
+    esac
+    sub "${label}: ${hint}"
+    while IFS=$'\t' read -r n e; do [ -n "$e" ] && row "$label" "${n:+$n  }${D}${e}${R}"; done < <(cfg people "$key" "$f")
+    while :; do
+      e="$(ask "$label address (blank when done)" "")"; [ -n "$e" ] || break
+      case "$e" in ?*@?*.?*) ;; *) warn "“${e}” is not an email address"; continue ;; esac
+      n="$(ask "Their name" "${e%@*}")"
+      cfg person_add "$key" "$n" "$e" "$f"; ok "added ${e} to ${label}"
+    done
+  done
+  cfg proj_set "$key" subject "$(ask "Subject" "$(cfg proj_get "$key" subject | grep . || cfg tpl_get subject)")"
+  ok "email for “$2” saved"
+}
+
+smtp_menu(){
+  local idx
   while :; do
-    name="$(cfg proj_get "$key" app)"; [ -n "$name" ] || name="$key"
-    printf "\n  ${D}%s${R}\n  ${B}%s${R}  ${D}%s${R}\n" "$RULE" "$name" "$(proj_version "$(cfg proj_get "$key" path)")" >&2
-    MENU_ITEMS=("build and upload" "edit To" "edit BCC" "edit Subject" "app details" "← back to apps")
-    MENU_NOTES=("  ${D}then send the email, if you want${R}"
-                "  ${D}$(cfg people "$key" to | cut -f2 | tr '\n' ' ')${R}"
-                "  ${D}$(cfg people "$key" bcc | cut -f2 | tr '\n' ' ')${R}"
-                "  ${D}$(cfg proj_get "$key" subject | grep . || cfg tpl_get subject)${R}"
-                "  ${D}name, app id, folder, credentials, remove${R}" "")
-    case "$(menu_pick "What to do" 5 0)" in
-      0) ship "$key" "$(cfg proj_get "$key" path)" ;;
-      1) people_menu "$key" to ;;
-      2) people_menu "$key" bcc ;;
-      3) cfg proj_set "$key" subject "$(ask "Subject (blank = default)" "$(cfg proj_get "$key" subject)")" ;;
-      4) project_menu "$key" || return ;;
-      5) return ;;
+    MENU_ITEMS=("$(printf '%-16s' 'address')"  "$(printf '%-16s' 'password')"
+                "$(printf '%-16s' 'smtp host')" "$(printf '%-16s' 'port')"
+                "$(printf '%-16s' 'from name')" "send a test to myself" "edit the mail template" "← back")
+    MENU_NOTES=("  ${D}$(cfg smtp_get user)${R}"
+                "  ${D}$([ -n "$(cfg smtp_get password)" ] && echo 'set' || echo 'not set yet')${R}"
+                "  ${D}$(cfg smtp_get host)${R}"
+                "  ${D}$(cfg smtp_get port)  · 465 for SSL, 587 for STARTTLS${R}"
+                "  ${D}$(cfg smtp_get from_name)  · the sender name people see${R}"
+                "  ${D}proves the settings work before a real send${R}"
+                "  ${D}opens config.json · {name} {app} {version} {link} {notes} {sender}${R}" "")
+    step "Mailbox"
+    idx="$(menu_pick "What to change" 7 0)"
+    case "$idx" in
+      0) cfg smtp_set user      "$(ask "Address" "$(cfg smtp_get user)")" ;;
+      1) cfg smtp_set password  "$(ask_secret "Password" "$(cfg smtp_get password)")" ; ok "saved" ;;
+      2) cfg smtp_set host      "$(ask "SMTP host" "$(cfg smtp_get host)")" ;;
+      3) cfg smtp_set port      "$(ask "Port" "$(cfg smtp_get port)")" ;;
+      4) cfg smtp_set from_name "$(ask "From name" "$(cfg smtp_get from_name)")" ;;
+      5) smtp_test ;;
+      6) open -t "$CONFIG" 2>/dev/null || warn "open $CONFIG yourself" ;;
+      7) return ;;
     esac
   done
 }
 
-project_menu(){ # $1 project key -> returns 1 if the app was removed
-  local key="$1" idx v
+edit_app(){ # $1 project key -> everything about one app in one place; returns 1 if it was removed
+  local key="$1" v
   while :; do
-    MENU_ITEMS=("$(printf '%-16s' 'app name')" "$(printf '%-16s' 'app id')"
-                "$(printf '%-16s' 'folder')"   "$(printf '%-16s' 'credentials')"
-                "remove this app" "← back")
-    MENU_NOTES=("  ${D}$(cfg proj_get "$key" app)  · used in the email${R}"
+    MENU_ITEMS=("$(printf '%-16s' 'To')" "$(printf '%-16s' 'CC')" "$(printf '%-16s' 'BCC')" "$(printf '%-16s' 'subject')"
+                "$(printf '%-16s' 'app name')" "$(printf '%-16s' 'app id')" "$(printf '%-16s' 'folder')"
+                "$(printf '%-16s' 'credentials')" "remove this app" "← back")
+    MENU_NOTES=("  ${D}$(cfg people "$key" to | cut -f2 | tr '\n' ' ' | grep . || echo 'nobody yet')${R}"
+                "  ${D}$(cfg people "$key" cc | cut -f2 | tr '\n' ' ' | grep . || echo '—')${R}"
+                "  ${D}$(cfg people "$key" bcc | cut -f2 | tr '\n' ' ' | grep . || echo '—')${R}"
+                "  ${D}$(cfg proj_get "$key" subject | grep . || cfg tpl_get subject)${R}"
+                "  ${D}$(cfg proj_get "$key" app)  · used in the email${R}"
                 "  ${D}$(cfg proj_get "$key" app_id)  · from the appho.st app page${R}"
                 "  ${D}$(cfg proj_get "$key" path)${R}"
                 "  ${D}user_id $(cfg proj_get "$key" user_id | grep . || echo 'not set')${R}" "" "")
-    step "App details"
-    idx="$(menu_pick "What to change" 5 0)"
-    case "$idx" in
-      0) cfg proj_set "$key" app    "$(ask "App name" "$(cfg proj_get "$key" app)")" ;;
-      1) cfg proj_set "$key" app_id "$(ask "App id" "$(cfg proj_get "$key" app_id)")" ;;
-      2) v="$(ask "Folder" "$(cfg proj_get "$key" path)")"
-         [ -d "$v" ] && cfg proj_set "$key" path "$v" || warn "no such folder" ;;
-      3) credentials "$key" ;;
-      4) [ "$(ask_yn "Remove “${key}” and its email lists" false)" = true ] && { cfg proj_del "$key"; ok "removed"; return 1; } ;;
-      5) return 0 ;;
-    esac
-  done
-}
-
-config_menu(){
-  local idx
-  while :; do
-    MENU_ITEMS=("mail account" "open config.json" "← back")
-    MENU_NOTES=("  ${D}$([ "$(cfg smtp_ready)" = yes ] && cfg smtp_get user || echo 'not set up yet')${R}"
-                "  ${D}$CONFIG  · mail template lives here${R}" "")
-    step "Settings"
-    idx="$(menu_pick "What to change" 2 0)"
-    case "$idx" in
-      0) smtp_menu ;;
-      1) open -t "$CONFIG" 2>/dev/null || warn "open $CONFIG yourself" ;;
-      2) return ;;
+    step "Edit “$(cfg proj_get "$key" app | grep . || echo "$key")”"
+    case "$(menu_pick "What to change" 9 0)" in
+      0) people_menu "$key" to ;;
+      1) people_menu "$key" cc ;;
+      2) people_menu "$key" bcc ;;
+      3) cfg proj_set "$key" subject "$(ask "Subject (blank = default)" "$(cfg proj_get "$key" subject)")" ;;
+      4) cfg proj_set "$key" app    "$(ask "App name" "$(cfg proj_get "$key" app)")" ;;
+      5) cfg proj_set "$key" app_id "$(ask "App id" "$(cfg proj_get "$key" app_id)")" ;;
+      6) v="$(ask "Folder" "$(cfg proj_get "$key" path)")"; v="${v/#\~/$HOME}"
+         [ -f "$v/pubspec.yaml" ] && cfg proj_set "$key" path "$v" || warn "no pubspec.yaml in that folder" ;;
+      7) credentials "$key" ;;
+      8) [ "$(ask_yn "Remove “${key}” and its email lists" false)" = true ] && { cfg proj_del "$key"; ok "removed"; return 1; } ;;
+      9) return 0 ;;
     esac
   done
 }
@@ -603,20 +675,20 @@ config_menu(){
 # ── main ──────────────────────────────────────────────────────────────────
 main(){
   DRY=no; VERBOSE=no
+  local arg ROOT="" HERE="" idx sel n napps
   for arg in "$@"; do
     case "$arg" in
       --dry-run|-n) DRY=yes ;;
-      --verbose|-v) VERBOSE=yes ;;
+      --verbose)    VERBOSE=yes ;;
       --version|-V|-v) echo "ship-apk $VERSION"; exit 0 ;;
-      config|-c)    cfg smtp_ready >/dev/null; banner "ship-apk $VERSION" "settings"; config_menu; exit 0 ;;
+      config|-c)    cfg smtp_ready >/dev/null; banner "ship-apk $VERSION" "mail account"; smtp_menu; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-apk${R} ${D}%s${R}\n\n" "$VERSION"
-        printf "    ${A}ship-apk${R}             build, upload, and optionally mail the link\n"
+        printf "    ${A}ship-apk${R}             your apps; pick one, it builds, uploads and mails the link\n"
         printf "    ${A}ship-apk --dry-run${R}   same, but print the mail instead of sending it\n"
         printf "    ${A}ship-apk --verbose${R}   stream the full build log instead of one line\n"
-        printf "    ${A}ship-apk config${R}      mail account and config file\n\n"
-        printf "  ${D}Run it inside a Flutter project and it offers to remember that project.\n"
-        printf "  Run it anywhere else and it asks which saved project to ship.\n"
+        printf "    ${A}ship-apk config${R}      mail account and template\n\n"
+        printf "  ${D}Run it inside a Flutter project and that app is preselected, or offered to add.\n"
         printf "  Settings and logs live in %s${R}\n\n" "$CONF"
         exit 0 ;;
     esac
@@ -627,40 +699,35 @@ main(){
   cfg smtp_ready >/dev/null   # creates config.json on first run
   banner "ship-apk $VERSION" "build it, ship it, mail the link"
   [ "$DRY" = yes ] && sub "${Y}dry run — it will upload but send no mail${R}"
-
-  local KEY="" ROOT="" idx
-  if ROOT="$(find_root)"; then
-    KEY="$(basename "$ROOT")"
-    if [ -z "$(cfg proj_get "$KEY" path)" ]; then
-      step "New app"
-      row "folder" "$ROOT"
-      row "version" "$(proj_version "$ROOT")"
-      [ "$(ask_yn "Add it to your apps" true)" = true ] && { KEY="$(add_app "$ROOT")" || KEY=""; } || KEY=""
-    else
-      # the folder may have moved since it was saved
-      [ "$(cfg proj_get "$KEY" path)" = "$ROOT" ] || cfg proj_set "$KEY" path "$ROOT"
-    fi
-  fi
+  ROOT="$(find_root)" || ROOT=""
 
   while :; do
-    if [ -n "$KEY" ]; then
-      app_screen "$KEY"; KEY=""
+    load_projects "$ROOT"; HERE=$HIT
+    napps=${#PROJ_KEYS[@]}
+    # this folder is a Flutter project nobody saved yet → "+ add app" starts selected, with it filled in
+    if [ -n "$ROOT" ] && [ "$HERE" -lt 0 ]; then
+      MENU_ITEMS+=("+ add this app");  MENU_NOTES+=("  ${G}● $(sed "s|^$HOME|~|" <<<"$ROOT")${R}"); sel=$napps
     else
-      load_projects
-      MENU_ITEMS+=("+ add an app"); MENU_NOTES+=("  ${D}a Flutter folder, an app id, credentials${R}")
-      MENU_ITEMS+=("settings");     MENU_NOTES+=("  ${D}mail account, config file${R}")
-      MENU_ITEMS+=("quit");         MENU_NOTES+=("")
-      printf "\n  ${D}%s${R}\n" "$RULE" >&2
-      step "Apps"
-      idx="$(menu_pick "Pick an app" $(( ${#MENU_ITEMS[@]} - 1 )) 0)"
-      if   [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 1 )) ]; then printf "\n" >&2; exit 0
-      elif [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 2 )) ]; then config_menu
-      elif [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 3 )) ]; then KEY="$(add_app)" || KEY=""
-      else
-        KEY="${PROJ_KEYS[$idx]}"
-        [ -d "${PROJ_PATHS[$idx]}" ] || warn "“${KEY}” points at a folder that no longer exists — fix it under app details"
-      fi
+      MENU_ITEMS+=("+ add app");       MENU_NOTES+=("  ${D}a Flutter folder, an app id, credentials${R}"); sel=$(( HERE < 0 ? 0 : HERE ))
     fi
+    MENU_ITEMS+=("edit an app" "mailbox" "quit")
+    MENU_NOTES+=("  ${D}To, CC, BCC, subject, credentials, folder, remove${R}"
+                 "  ${D}$([ "$(cfg smtp_ready)" = yes ] && cfg smtp_get user || echo 'not set up yet') · template${R}" "")
+    step "Apps"
+    [ "$napps" -gt 0 ] || sub "no apps yet — add one to get started"
+    idx="$(menu_pick "Pick an app to build and upload" $(( napps + 3 )) "$sel")"
+    case $(( idx - napps )) in
+      0) n="$(add_app "$([ "$HERE" -lt 0 ] && printf '%s' "$ROOT")")" || continue
+         [ -n "$ROOT" ] && [ "$(cfg proj_get "$n" path)" = "$ROOT" ] && { ship "$n" "$ROOT" || exit 0; } ;;
+      1) [ "$napps" -gt 0 ] || { warn "no apps yet"; continue; }
+         load_projects "$ROOT"; MENU_ITEMS+=("← back"); MENU_NOTES+=("")
+         step "Edit which app"
+         idx="$(menu_pick "App" "$napps" "$(( HERE < 0 ? 0 : HERE ))")"
+         [ "$idx" -lt "$napps" ] && edit_app "${PROJ_KEYS[$idx]}" ;;
+      2) [ "$(cfg smtp_ready)" = yes ] && smtp_menu || setup_mailbox ;;
+      3) printf "\n" >&2; exit 0 ;;
+      *) ship "${PROJ_KEYS[$idx]}" "${PROJ_PATHS[$idx]}" || { printf "\n" >&2; exit 0; } ;;
+    esac
   done
 }
 

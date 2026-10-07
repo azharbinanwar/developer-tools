@@ -20,27 +20,39 @@ Install options, and the `developer-tools` hub that runs every tool from one men
 
 ## What happens
 
-1. **First run in a project**: it offers to remember the folder and asks for the app name, the appho.st app id, `user_id` and API key. All three come from the app's page on appho.st › Private API › download config.
-2. **Every run**: pick build fresh or reuse the last APK, choose whether to send the email, then everything else runs unattended.
-3. **Done**: the link is copied to your clipboard, printed as a QR code if `qrencode` is installed, and mailed if you asked.
-
-Run it outside any project and it lists your saved apps to pick from.
+1. **Apps first.** It opens on your saved apps. Inside an app's folder that app is preselected. Inside a Flutter folder nobody saved yet, "+ add this app" is preselected with the folder filled in; adding asks for the app name, the appho.st app id, `user_id` and API key (all from the app's page on appho.st › Private API › download config).
+   ```
+   ▸ Apps
+    ❯ Reg Register          Nh8IpVYIVA   2 people     ● this folder
+      Studio Desk           Ab3kQ9xLmP   no mail      ~/Desktop/mine/studiodesk
+      + add app
+      edit an app
+      mailbox
+      quit
+   ```
+2. **Build**: a fresh `flutter build apk --release` (or `fvm flutter` when the project pins it), or the last build.
+3. **Email**, settled before anything runs, naming exactly what is missing:
+   - no mailbox yet → **set up mailbox**: address, password, SMTP host and port prefilled for Gmail, Outlook, iCloud, Yahoo and Zoho, sender name, then an optional test mail
+   - mailbox ready, nobody to send to → **set up this app's email**: To, CC, BCC and subject, one question at a time
+   - both ready → **send the link to N people**, skip, or change To, CC, BCC or subject
+4. **Build, upload, mail** run unattended. The link is copied and shown as a QR code if `qrencode` is installed.
+5. **Done**: open the APK folder (first when no mail went out), open the link, back to apps, or quit.
 
 ## Commands
 
 ```
-ship-apk             build, upload, and optionally mail the link
-ship-apk --dry-run   same, but print the mail instead of sending it
+ship-apk             your apps; pick one, it builds, uploads and mails the link
+ship-apk --dry-run   same, but print the mail instead of sending it (it still builds and uploads)
 ship-apk --verbose   stream the full build log instead of one line
-ship-apk config      mail account and config file
-ship-apk --version
+ship-apk config      mailbox and template
+ship-apk -v          version
 ```
 
 ## Email
 
-Each app has a **To** list and an optional hidden **BCC** list, edited from the app screen. The mail account (SMTP host, port, address, password, from name) is shared by all apps and set up under `ship-apk config`, which also has a "send a test to myself".
+The **mailbox** is the account mail is sent from, shared by every app. Each app has its own **To**, **CC**, **BCC** and **subject** under **edit an app**. Passwords show one `*` per character, and Enter keeps a saved one.
 
-The subject and body are plain text in `config.json` with these placeholders: `{name}` `{app}` `{version}` `{link}` `{notes}` `{sender}`. `{notes}` is the git log since the last send, so the mail says what changed.
+The subject and body are plain text in `config.json` (mailbox › edit the mail template) with these placeholders: `{name}` `{app}` `{version}` `{link}` `{notes}` `{sender}`. `{notes}` is the git log since the last send, so the mail says what changed.
 
 ## Needs
 
