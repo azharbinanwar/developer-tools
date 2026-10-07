@@ -90,8 +90,11 @@ echo "── ship-site"
   check "vc: file is 0600"                    is "$(stat -f '%Lp' "$HOME/.config/ship-site/config.json")" 600
   check "vc: bad token → ERR line"            grep -q "^ERR" <<<"$(vc user not-a-token 2>/dev/null || true)"
   check "vc: bad token exits non-zero"        not vc user not-a-token
+  vc cache_add me prj_9 site-a site-a.vercel.app; vc proj_set /tmp/site-a id prj_9
+  check "landing: cached row with its folder" is "$(vc landing)" "me	prj_9	site-a	site-a.vercel.app	/tmp/site-a"
   vc acct_del me
   check "vc: delete"                          is "$(vc accounts)" ""
+  check "landing: hides removed accounts"     is "$(vc landing)" ""
   mkdir -p "$HOME/.config/ship-site/accounts/tok" "$HOME/.config/ship-site/accounts/web"
   printf 'abc\n' > "$HOME/.config/ship-site/accounts/tok/token"; printf '{"token":"xyz"}' > "$HOME/.config/ship-site/accounts/web/auth.json"
   check "acct_token: pasted token"            is "$(acct_token tok)" abc
@@ -114,6 +117,9 @@ echo "── ship-site"
   check "stage: no .git inside the copy"      test ! -e "$st/.git"
   printf '{"headers":[]}' > "$p/vercel.json"; st2="$(mktemp -d)"; stage_dist "$p" "$st2" a b c
   check "stage: project vercel.json wins"     is "$(cat "$st2/vercel.json")" '{"headers":[]}'
+  ROOT=/somewhere; check "choose_folder: inside a project uses it"  is "$(choose_folder "")" /somewhere
+  check "choose_folder: missing saved folder → current one"        is "$(choose_folder /gone/away)" /somewhere
+  ROOT="";         check "choose_folder: outside, saved folder used" is "$(choose_folder "$p")" "$p"
   rm -rf "$p" "$st" "$st2"
 )
 

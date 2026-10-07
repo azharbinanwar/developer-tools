@@ -20,19 +20,31 @@ Install options, and the `developer-tools` hub, are in the [main README](../READ
 
 ## What happens
 
-1. **Account**: pick a saved Vercel account or add one. Adding asks for a name, then how to sign in: the Vercel browser login, or a token pasted from vercel.com/account/tokens. If the account belongs to teams you pick which scope it deploys to.
-2. **Project**: the projects in that account are listed. Pick one, or create one by typing a name. Nothing is created unless you ask.
+1. **Projects first.** It opens on every project across your saved Vercel accounts, refreshed from Vercel behind a spinner:
+   ```
+   ▸ Projects
+      you are in ~/Desktop/mine/rig-register-web
+    ❯ rig-register-web     Mohsin Dev   rig-register-web.vercel.app   ● this folder
+      rig-register-web-v2  Mohsin Dev   rig-register-web-v2.vercel.app
+      studiodesk           Mohsin Dev   studiodesk-chi.vercel.app
+      + new project
+      accounts
+      refresh
+      quit
+   ```
+   Inside a project folder, the Vercel project it publishes to is already selected. Press Enter.
+2. **Folder.** Inside a project, that folder is built. Outside one, the folder the project was last built from is used, or it asks once and remembers.
 3. **Where**: main website (production) or a test version (a fresh preview URL). Skip the question with `--prod` or `--preview`.
 4. **Build**: the exact command is shown, then run. `npm run build`, or pnpm, yarn or bun if their lockfile is present.
 5. **Publish**: the exact `vercel deploy` command is shown, then run from a temporary copy of `dist/` outside your git repo. No source, `node_modules`, `.env` or commit info leaves your Mac. The copy is deleted afterwards.
 6. **Done**: the link is printed and copied. For the main website that is the project's domain.
 
-The account and project are remembered per folder. Next time they show at the top with a "change account or project" option.
+**+ new project** creates one on Vercel by the name you type, asking which account only if you have more than one. **accounts** is where you add one (Vercel browser sign-in or a pasted token), pick its team scope, or remove it. First run with no account goes straight to adding one.
 
 ## Commands
 
 ```
-ship-site             build this Vite project and publish dist/ to Vercel
+ship-site             your Vercel projects; pick one, it builds and publishes
 ship-site --prod      straight to the main website, no question asked
 ship-site --preview   a fresh preview URL
 ship-site ~/site      a project folder other than the current one
