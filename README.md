@@ -29,6 +29,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tool
 
 Nothing lands on your Mac except your settings (see [Where settings live](#where-settings-live)). You always get the newest code.
 
+Not sure yet? Add `--dry-run` (or `-n`) to either tool. It walks the whole flow, checks your setup, shows exactly what it would build, upload, mail or deploy, and changes nothing.
+
 ---
 
 ## 2. Install it
@@ -42,7 +44,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tool
 ```
 
 ```
-◆  developer-tools 1.0.0
+◆  developer-tools
 
   ▸ What do you want to do
      ↑↓ move · Enter picks · q quits
@@ -52,7 +54,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tool
      quit
 ```
 
-**Run a tool** lists them and runs the one you pick, fetching the latest release if it is not installed. **Install or update** shows every tool ticked: press Enter for all, or untick with space first. **Remove** works the same way. Install the hub itself so you can type `developer-tools` any time:
+**Run a tool** lists them and runs the one you pick, fetching the latest release if it is not installed. **Install or update** shows every tool ticked: press Enter for all, or untick with space first. It also installs the hub itself, so `developer-tools` works from then on. **Remove** works the same way. Or install the hub with Homebrew:
 
 ```sh
 brew trust azharbinanwar/tap                        # once, Homebrew 7 asks this of every third-party tap
@@ -87,10 +89,10 @@ All three install the same files. Want everything: the hub. Want one tool: Homeb
 
 | Tool | Settings |
 | --- | --- |
-| ship-apk | `~/.config/ship-apk/config.json` plus send logs in `logs/` |
-| ship-site | `~/.config/ship-site/<project>.json` |
+| ship-apk | `~/.config/ship-apk/config.json` plus build and send logs in `logs/` |
+| ship-site | `~/.config/ship-site/config.json` plus each account's sign-in in `accounts/` |
 
-Trying it online and installing it share the same settings, so you can start one way and switch later. Nothing is ever written into your project folder. Credentials are stored with mode 0600; keep that folder private.
+Trying it online and installing it share the same settings, so you can start one way and switch later. The only thing either tool changes in your project is the version (`pubspec.yaml` or `package.json`), and only when you pick **bump**. Credentials are stored with mode 0600; keep that folder private.
 
 ---
 
@@ -100,7 +102,7 @@ Trying it online and installing it share the same settings, so you can start one
 ./test.sh
 ```
 
-Syntax-checks every script, runs `--help`, and exercises the config store and mail rendering in a throwaway home folder. The same test runs in GitHub Actions on every push.
+Syntax-checks every script, drives the menus with fed keystrokes, and exercises the config stores, mail rendering, version bumps and dry runs in a throwaway home folder. The same test runs in GitHub Actions on every push.
 
 ## Releases
 

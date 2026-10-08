@@ -16,7 +16,7 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.0.5"
+VERSION="1.1.0"
 RULE="────────────────────────────────────────────"
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
@@ -26,11 +26,13 @@ warn(){ printf "     ${Y}!${R} %s\n" "$1" >&2; }
 die(){ printf "\n  ${E}${B}✗ %s${R}\n" "$1" >&2; exit 1; }
 row(){ printf "     ${D}%-11s${R} %s\n" "$1" "$2" >&2; }
 have(){ command -v "$1" >/dev/null 2>&1; }
+cmd(){ printf "     ${D}\$${R} %s\n" "$1" >&2; }
 
 CONF="$HOME/.config/ship-apk"
 CONFIG="$CONF/config.json"
 LOGS="$CONF/logs"
 API="https://appho.st/api"
+DRY=no; VERBOSE=no
 MAX_MB=100          # appho.st free tier rejects builds bigger than this
 
 # ── config ────────────────────────────────────────────────────────────────
@@ -99,21 +101,31 @@ PY
 }
 
 # ── menus and prompts ─────────────────────────────────────────────────────
+fit(){ # $1 text (may carry colour codes)  $2 width -> the text as is, or cut with … when it would wrap
+  local plain
+  plain="$(printf '%s' "$1" | sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b(B//g')"
+  [ "${#plain}" -le "$2" ] && { printf '%s' "$1"; return; }
+  printf '%s…' "${plain:0:$(( $2 - 1 ))}"
+}
 MENU_ITEMS=(); MENU_NOTES=()
 menu_pick(){ # $1 title  $2 skip index (-1 for none)  $3 index to start on -> echoes chosen index
   local title="$1" skip="$2"
   local n=${#MENU_ITEMS[@]} sel="$3" k rest i saved
   saved="$(stty -g 2>/dev/null || true)"
+  printf '\033[?7l' >&2   # no wrapping while the menu is up: a long row is cut, not wrapped, so the redraw stays aligned
   [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null || true
-                       trap 'stty "$saved" 2>/dev/null; exit 130' INT; }
+                       trap 'stty "$saved" 2>/dev/null; printf "\033[?7h" >&2; exit 130' INT; }
   printf "     ${D}%s${R}  ${D}· ↑↓ move · Enter picks%s${R}\n" \
     "$title" "$([ "$skip" -ge 0 ] && echo " · q skips")" >&2
   for ((i=0;i<n;i++)); do printf '\n' >&2; done
+  # rows are cut to the window width up front: a wrapped row would throw off the cursor-up redraw
+  local w rows=(); w=$(( $(tput cols 2>/dev/null || echo 80) - 8 ))
+  for ((i=0;i<n;i++)); do rows+=("$(fit "${MENU_ITEMS[$i]}${MENU_NOTES[$i]:-}" "$w")"); done
   while :; do
     printf "\033[%dA" "$n" >&2
     for i in $(seq 0 $((n-1))); do
-      if [ "$i" -eq "$sel" ]; then printf "\r\033[K     ${A}❯ %s${R}%s\n" "${MENU_ITEMS[$i]}" "${MENU_NOTES[$i]}" >&2
-      else                         printf "\r\033[K       ${D}%s${R}%s\n" "${MENU_ITEMS[$i]}" "${MENU_NOTES[$i]}" >&2; fi
+      if [ "$i" -eq "$sel" ]; then printf "\r\033[K     ${A}❯ %s${R}\n" "${rows[$i]}" >&2
+      else                         printf "\r\033[K       ${D}%s${R}\n" "${rows[$i]}" >&2; fi
     done
     IFS= read -rsn1 k 2>/dev/null || break
     case "$k" in
@@ -125,11 +137,12 @@ menu_pick(){ # $1 title  $2 skip index (-1 for none)  $3 index to start on -> ec
       q|Q)     [ "$skip" -ge 0 ] && { sel="$skip"; break; } ;;
     esac
   done
+  printf '\033[?7h' >&2
   [ -n "$saved" ] && { trap - INT; stty "$saved" 2>/dev/null || true; }
   printf '%s' "$sel"
 }
 ask(){ # $1 label  $2 default -> prints default if the user just hits Enter
-  local r; printf "     ${A}%s${R} ${D}[%s]${R} ${A}›${R} " "$1" "${2:-none}" >&2
+  local r; printf "     ${A}%s${R}%s ${A}›${R} " "$1" "${2:+ ${D}[$2]${R}}" >&2
   read -r r; printf '%s' "${r:-$2}"; }
 ask_secret(){ # $1 label  $2 saved value -> one * per character typed; Enter on nothing keeps the saved value
   local r="" c
@@ -353,8 +366,9 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
   esac
 
   # curl exits 0 on a 4xx from storage, so the status code is the real verdict
-  code="$(curl -H 'Content-Type: application/octet-stream' -T "$apk" "$url" -o /dev/null -w '%{http_code}' --progress-bar)"
-  case "$code" in 2??) ;; *) warn "storage rejected the build (HTTP $code)"; return 1 ;; esac
+  code="$(curl -H 'Content-Type: application/octet-stream' -T "$apk" "$url" -o /dev/null -w '%{http_code}' --progress-bar)"; rc=$?
+  [ "$rc" -eq 0 ] || { warn "upload interrupted — the network dropped or appho.st was unreachable (curl exit $rc)"; return 1; }
+  case "$code" in 2??) ;; *) warn "appho.st storage rejected the build (HTTP $code)"; return 1 ;; esac
 
   # the link appears a moment after the PUT lands, so give it a few tries
   for try in 1 2 3 4 5; do
@@ -380,6 +394,139 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
   fi
 }
 
+recipients(){ # $1 key -> "2 people + 1 CC + 1 BCC"
+  local t c b out
+  t="$(cfg people "$1" to | grep -c .)"; c="$(cfg people "$1" cc | grep -c .)"; b="$(cfg people "$1" bcc | grep -c .)"
+  out="$t $([ "$t" = 1 ] && echo person || echo people)"
+  [ "$c" -gt 0 ] && out="$out + $c CC"
+  [ "$b" -gt 0 ] && out="$out + $b BCC"
+  printf '%s' "$out"
+}
+
+pick_notes(){ # $1 root  $2 key -> echoes the "What changed" text for the mail, chosen before anything runs
+  local git f
+  git="$(git_notes "$1" "$2")"
+  step "What changed  ${D}goes into the mail as {notes}${R}"
+  if [ -n "$git" ]; then
+    printf '%s\n' "$git" | while IFS= read -r f; do sub "$f"; done
+    MENU_ITEMS=("use these" "write my own" "no notes")
+    MENU_NOTES=("  ${D}commit titles since the last send${R}" "  ${D}opens your editor with these to start from · Markdown is fine${R}" "")
+  else
+    sub "no commits to list — not a git repo, or nothing new since the last send"
+    MENU_ITEMS=("no notes" "write my own"); MENU_NOTES=("" "  ${D}opens your editor · Markdown is fine${R}")
+  fi
+  case "${MENU_ITEMS[$(menu_pick "Notes" -1 0)]}" in
+    "use these") printf '%s' "$git" ;;
+    "no notes")  ;;
+    *) f="$(mktemp -t shipapk-notes).md"
+       { printf '%s\n' "$git"; printf '\n# Write what changed. Lines starting with # are dropped. Save and close to continue.\n'; } > "$f"
+       if [ -n "${VISUAL:-${EDITOR:-}}" ]; then
+         if [ -t 2 ]; then ${VISUAL:-$EDITOR} "$f" </dev/tty >/dev/tty; else ${VISUAL:-$EDITOR} "$f" >&2; fi
+       else
+         open -t "$f" 2>/dev/null || warn "open $f yourself"
+         printf "     ${A}Opened in TextEdit — save it (⌘S), then press Enter here${R} ${A}›${R} " >&2; read -r _
+       fi
+       git="$(grep -v '^#' "$f" | awk '
+         /^[[:space:]]*[•●▪–]+[[:space:]]*$/ { pre = "- "; next }
+         /^[[:space:]]*[◦○]+[[:space:]]*$/   { pre = "  - "; next }
+         { sub(/^[[:space:]]*[•●▪]+[[:space:]]+/, "- "); sub(/^[[:space:]]*[◦○]+[[:space:]]+/, "  - "); print pre $0; pre = "" }' \
+         | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+       rm -f "$f"
+       if [ -n "$git" ]; then ok "notes for the mail:"; printf '%s\n' "$git" | while IFS= read -r f; do sub "$f"; done
+       else warn "the file was empty — sending without notes"; fi
+       printf '%s' "$git" ;;
+  esac
+}
+
+bump_version(){ # $1 version like 1.4.2+17  $2 build|patch|minor|major -> next version; the +build always goes up when present
+  local name="${1%%+*}" build="" ma mi pa
+  name="${name%%-*}"   # a pre-release tag (1.0.0-beta.1) is dropped: bumping moves past it
+  case "$1" in *+*) build="${1#*+}" ;; esac
+  IFS=. read -r ma mi pa <<<"$name"; ma="${ma:-0}"; mi="${mi:-0}"; pa="${pa:-0}"
+  case "$2" in
+    patch) pa=$((pa + 1)) ;;
+    minor) mi=$((mi + 1)); pa=0 ;;
+    major) ma=$((ma + 1)); mi=0; pa=0 ;;
+  esac
+  case "$build" in ''|*[!0-9]*) [ "$2" = build ] && build=1 ;; *) build=$((build + 1)) ;; esac
+  printf '%s%s' "$ma.$mi.$pa" "${build:++$build}"
+}
+
+version_guard(){ # $1 key  $2 root  $3 version -> shows the version, bumps only if asked; echoes the version to ship
+  local key="$1" root="$2" v="$3" nv repeat=no
+  # only a real pubspec version is offered for a bump; the date stamp used when pubspec has none is not
+  grep -q '^version: *[0-9]' "$root/pubspec.yaml" 2>/dev/null || { printf '%s' "$v"; return; }
+  [ "$v" = "$(cfg proj_get "$key" last_version)" ] && repeat=yes
+  step "Version  ${B}$v${R}$([ "$repeat" = yes ] && printf "  ${Y}shipped last time${R}")"
+  MENU_ITEMS=("ship as $v" "bump"); MENU_NOTES=("" "  ${D}next build is $(bump_version "$v" build), or type your own${R}")
+  [ "$(menu_pick "Version" -1 "$([ "$repeat" = yes ] && echo 1 || echo 0)")" = 0 ] && { printf '%s' "$v"; return; }
+  while :; do
+    nv="$(ask "New version" "$(bump_version "$v" build)")"
+    echo "$nv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9]+)?$' && break
+    warn "“${nv}” is not a version like 1.0.0+4"
+  done
+  [ "$nv" = "$v" ] && { printf '%s' "$v"; return; }
+  if [ "$DRY" = yes ]; then row "pubspec" "would become version: ${D}$v${R} → ${B}$nv${R}  ${D}(dry run, not written)${R}"; printf '%s' "$nv"; return; fi
+  sed -i '' "s/^version:.*/version: $nv/" "$root/pubspec.yaml" || { warn "could not write pubspec.yaml"; printf '%s' "$v"; return; }
+  row "pubspec" "version: ${D}$v${R} → ${B}$nv${R}"
+  printf '%s' "$nv"
+}
+
+smtp_login_check(){ # logs in to the mailbox and out again, sends nothing -> "OK" or "FAIL<TAB>reason"
+python3 - "$CONFIG" <<'PY2'
+import json, smtplib, ssl, sys
+s = json.load(open(sys.argv[1]))["smtp"]
+port = int(s.get("port") or 465)
+try:
+    if port == 465: c = smtplib.SMTP_SSL(s["host"], port, context=ssl.create_default_context(), timeout=20)
+    else:
+        c = smtplib.SMTP(s["host"], port, timeout=20); c.starttls(context=ssl.create_default_context())
+    c.login(s["user"], s["password"]); c.quit(); print("OK")
+except Exception as e:
+    print("FAIL\t" + str(e).replace("\n", " "))
+PY2
+}
+
+dry_ship(){ # $1 key $2 root $3 name $4 version $5 fresh $6 last apk $7 want_mail $8 notes -> checks, then what would happen; changes nothing
+  local key="$1" root="$2" name="$3" version="$4" fresh="$5" apk="$6" want_mail="$7" notes="$8" fl bin r bad=0 idx
+  step "Dry run · checks"
+  fl="$(flutter_cmd "$root" 2>/dev/null)"; bin="${fl%% *}"
+  have "$bin" && ok "$fl is installed" || { warn "✗ $bin is not installed"; bad=1; }
+  grep -q '^version: *[0-9]' "$root/pubspec.yaml" && ok "pubspec.yaml has a version" || { warn "✗ pubspec.yaml has no version line — a date stamp would be used"; }
+  [ -n "$(cfg proj_get "$key" app_id)" ] && ok "appho.st app id is set" || { warn "✗ no appho.st app id"; bad=1; }
+  { [ -n "$(cfg proj_get "$key" user_id)" ] && [ -n "$(cfg proj_get "$key" key)" ]; } && ok "appho.st user_id and API key are set" || { warn "✗ appho.st user_id or API key missing"; bad=1; }
+  if [ "$want_mail" = yes ]; then
+    r="$(smtp_login_check)"
+    case "$r" in OK) ok "mailbox login works  ${D}$(cfg smtp_get user)${R}" ;; *) warn "✗ mailbox login failed: ${r#FAIL	}"; bad=1 ;; esac
+  fi
+
+  step "Dry run · would run"
+  if [ "$fresh" = yes ]; then cmd "cd $root && $fl build apk --release"
+  else row "build" "use the last build  ${D}$(sed "s|^$HOME|~|" <<<"$apk")${R}"; fi
+  row "upload" "→ appho.st app $(cfg proj_get "$key" app_id)  ${D}as $name $version${R}"
+  if [ "$want_mail" = yes ]; then
+    step "Dry run · the mail that would go out"
+    send_mail "$key" "$name" "$version" "https://appho.st/d/…" "$notes" yes | grep -v '^DRY' >&2
+  else
+    row "mail" "none — skipped"
+  fi
+  printf "\n" >&2
+  [ "$bad" = 0 ] && ok "dry run passed — nothing was built, uploaded, mailed or written" \
+                 || warn "dry run found problems above — nothing was built, uploaded, mailed or written"
+
+  MENU_ITEMS=(); MENU_NOTES=()
+  [ -n "$apk" ] && { MENU_ITEMS+=("open the APK folder"); MENU_NOTES+=("  ${D}$(sed "s|^$HOME|~|" <<<"$(dirname "$apk")")${R}"); }
+  MENU_ITEMS+=("back to apps" "quit"); MENU_NOTES+=("" "")
+  while :; do
+    idx="$(menu_pick "What next" $(( ${#MENU_ITEMS[@]} - 1 )) $(( ${#MENU_ITEMS[@]} - 2 )))"
+    case "${MENU_ITEMS[$idx]}" in
+      "open the APK folder") open "$(dirname "$apk")" 2>/dev/null ;;
+      "back to apps") return 0 ;;
+      quit) return 1 ;;
+    esac
+  done
+}
+
 # ── ship ──────────────────────────────────────────────────────────────────
 # The flow is: pick the build, settle mail (send, set it up, or skip), then
 # build, upload and mail unattended, then a done menu. Nothing asks mid-run.
@@ -394,8 +541,13 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
 
   printf "\n  ${D}%s${R}\n  ${B}%s${R}  ${D}%s${R}\n" "$RULE" "$name" "$version" >&2
 
+  # 0. same version as last time? bump it (fresh build forced) or ship it again knowingly
+  local was="$version"
+  version="$(version_guard "$key" "$root" "$version")"
+
   # 1. which build
   apk="$(last_build "$root")"
+  [ "$version" != "$was" ] && apk=""   # the last APK carries the old version
   MENU_ITEMS=("build a fresh one"); MENU_NOTES=("  ${D}$(flutter_cmd "$root") build apk --release${R}")
   if [ -n "$apk" ]; then
     MENU_ITEMS+=("use the last build")
@@ -422,8 +574,8 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
       MENU_NOTES=("  ${D}To, CC, BCC and subject for “${name}”${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}")
       [ "$(menu_pick "Mailbox ready · nobody to send to yet" 1 0)" = 0 ] && { setup_app_mail "$key" "$name"; continue; }
     else
-      MENU_ITEMS=("send the link to $n $([ "$n" = 1 ] && echo person || echo people)" "skip mail this time" "change To, CC, BCC or subject")
-      MENU_NOTES=("  ${D}$(cfg people "$key" to | cut -f2 | tr '\n' ' ')${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}" "")
+      MENU_ITEMS=("send the link to $(recipients "$key")" "skip mail this time" "change To, CC, BCC or subject")
+      MENU_NOTES=("  ${D}To $(cfg people "$key" to | cut -f2 | tr '\n' ' ')$(cfg people "$key" cc | cut -f2 | tr '\n' ' ' | sed 's/^./· CC &/')$(cfg people "$key" bcc | cut -f2 | tr '\n' ' ' | sed 's/^./· BCC &/')${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}" "")
       [ "$want_mail" = yes ] && idx=0 || idx=1
       case "$(menu_pick "Mail" 1 "$idx")" in
         0) want_mail=yes; break ;;
@@ -433,35 +585,34 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
     want_mail=no; break
   done
   cfg proj_set "$key" mail_default "$want_mail"
+  [ "$want_mail" = yes ] && notes="$(pick_notes "$root" "$key")"
+
+  [ "$DRY" = yes ] && { dry_ship "$key" "$root" "$name" "$version" "$fresh" "$apk" "$want_mail" "$notes"; return; }
 
   # 3. nothing below asks anything — walk away
   if [ "$fresh" = yes ]; then apk="$(build_apk "$root")" || return 0; fi
   [ -n "$apk" ] || return 0
-  do_upload "$apk" "$key" "$name" "$version" || return 0
+  until do_upload "$apk" "$key" "$name" "$version"; do
+    MENU_ITEMS=("retry the upload" "back to apps" "quit"); MENU_NOTES=("  ${D}same APK, no rebuild${R}" "" "")
+    case "$(menu_pick "Upload did not finish" 2 0)" in 1) return 0 ;; 2) return 1 ;; esac
+  done
+  cfg proj_set "$key" last_version "$version"; cfg proj_set "$key" last_date "$(date '+%d %b %H:%M')"
 
   if [ "$want_mail" = no ]; then
     log_send "$key" "$version" "$UPLOAD_LINK" "0 (link only)"
   else
-    notes="$(git_notes "$root" "$key")"
-    if [ "$DRY" = yes ]; then
-      step "Dry run — this is what would be sent"
-      send_mail "$key" "$name" "$version" "$UPLOAD_LINK" "$notes" yes >&2
-      warn "dry run: nothing was mailed"
-      log_send "$key" "$version" "$UPLOAD_LINK" "0 (dry run)"
-    else
-      step "Sending"
-      result="$(send_mail "$key" "$name" "$version" "$UPLOAD_LINK" "$notes")"
-      case "$result" in
-        OK*) count="$(printf '%s' "$result" | cut -f2)"; fails="$(printf '%s' "$result" | cut -f3)"
-             ok "sent to $count address$([ "$count" = 1 ] || echo es)"
-             [ -n "$fails" ] && warn "failed: $fails"
-             cfg proj_set "$key" last_sha "$(head_sha "$root")"
-             log_send "$key" "$version" "$UPLOAD_LINK" "$count" ;;
-        NO_RECIPIENTS) warn "no recipients saved"; want_mail=no ;;
-        FAIL*) warn "could not send: $(printf '%s' "$result" | cut -f2)"
-               sub "check host, port, address and password under mailbox"; want_mail=no ;;
-      esac
-    fi
+    step "Sending"
+    result="$(send_mail "$key" "$name" "$version" "$UPLOAD_LINK" "$notes")"
+    case "$result" in
+      OK*) count="$(printf '%s' "$result" | cut -f2)"; fails="$(printf '%s' "$result" | cut -f3)"
+           ok "sent to $count address$([ "$count" = 1 ] || echo es)"
+           [ -n "$fails" ] && warn "failed: $fails"
+           cfg proj_set "$key" last_sha "$(head_sha "$root")"
+           log_send "$key" "$version" "$UPLOAD_LINK" "$count" ;;
+      NO_RECIPIENTS) warn "no recipients saved"; want_mail=no ;;
+      FAIL*) warn "could not send: $(printf '%s' "$result" | cut -f2)"
+             sub "check host, port, address and password under mailbox"; want_mail=no ;;
+    esac
   fi
 
   # 4. done — what next; when no mail went out, opening the APK folder comes first
@@ -504,7 +655,7 @@ add_app(){ # $1 folder (optional) -> echoes the new project key
 }
 
 credentials(){ # $1 project key
-  step "appho.st credentials for “$1”"
+  step "appho.st credentials for “$(cfg proj_get "$1" app | grep . || echo "$1")”"
   sub "both come from the app's page on appho.st › Private API › download config"
   cfg proj_set "$1" user_id "$(ask "user_id" "$(cfg proj_get "$1" user_id)")"
   cfg proj_set "$1" key     "$(ask "API key" "$(cfg proj_get "$1" key)")"
@@ -685,7 +836,7 @@ main(){
       -h|--help)
         printf "\n  ${B}ship-apk${R} ${D}%s${R}\n\n" "$VERSION"
         printf "    ${A}ship-apk${R}             your apps; pick one, it builds, uploads and mails the link\n"
-        printf "    ${A}ship-apk --dry-run${R}   same, but print the mail instead of sending it\n"
+        printf "    ${A}ship-apk --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
         printf "    ${A}ship-apk --verbose${R}   stream the full build log instead of one line\n"
         printf "    ${A}ship-apk config${R}      mail account and template\n\n"
         printf "  ${D}Run it inside a Flutter project and that app is preselected, or offered to add.\n"
@@ -698,7 +849,7 @@ main(){
   have python3 || die "python3 is required (it ships with macOS developer tools)."
   cfg smtp_ready >/dev/null   # creates config.json on first run
   banner "ship-apk $VERSION" "build it, ship it, mail the link"
-  [ "$DRY" = yes ] && sub "${Y}dry run — it will upload but send no mail${R}"
+  [ "$DRY" = yes ] && sub "${Y}dry run — checks everything, then shows what it would do; nothing is built, uploaded, mailed or written${R}"
   ROOT="$(find_root)" || ROOT=""
 
   while :; do

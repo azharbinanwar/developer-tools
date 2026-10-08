@@ -23,6 +23,7 @@ for f in ship-apk/ship-apk ship-site/ship-site developer-tools; do
   check "--help $f" bash "$f" --help
   check "--version $f" is "$(bash "$f" --version | awk '{print $2}')" "$v"
 done
+for f in ship-apk/ship-apk ship-site/ship-site; do check "-n is listed in --help $f" bash -c "bash $f --help 2>&1 | grep -q -- '(also -n)'"; done
 check "refuses piped stdin" bash -c 'bash ship-apk/ship-apk </dev/null 2>&1 | grep -q "needs a terminal"'
 check "hub rejects an unknown tool" bash -c 'bash developer-tools nope 2>&1 | grep -q "no tool called"'
 
@@ -37,6 +38,9 @@ echo "── ship-apk"
   check "menu: up wraps to the last item"     is "$(menu_pick t -1 0 <<<"${up}${enter}" 2>/dev/null)" 2
   check "menu: q jumps to the skip index"     is "$(menu_pick t 2 0 <<<"q" 2>/dev/null)" 2
   check "menu: j/k keys move too"             is "$(menu_pick t -1 0 <<<"jj${enter}" 2>/dev/null)" 2
+  check "fit: short coloured row left alone"  is "$(fit $'\e[2mabc\e[0m' 10)" $'\e[2mabc\e[0m'
+  check "fit: long row cut with …"            is "$(fit "send the link to 1 person + 1 CC" 12)" "send the li…"
+  check "fit: colour codes do not count"      is "$(fit $'\e[36mabcdef\e[0m' 6)" $'\e[36mabcdef\e[0m'
   check "ask: Enter keeps the default"        is "$(ask x dflt <<<"" 2>/dev/null)" dflt
   check "ask: typed value wins"               is "$(ask x dflt <<<"typed" 2>/dev/null)" typed
   check "ask_yn: n → false"                   is "$(ask_yn x true <<<"n" 2>/dev/null)" false
@@ -100,6 +104,51 @@ ANS
   cfg proj_set demo last_sha "$(cd "$p" && git rev-parse HEAD~1)"
   check "git_notes: only since the last send" is "$(git_notes "$p" demo)" "- second"
   check "git_notes: not a repo → empty"       is "$(git_notes /tmp demo)" ""
+  check "bump: build"                         is "$(bump_version 1.0.0+3 build)" 1.0.0+4
+  check "bump: patch also raises build"       is "$(bump_version 1.0.0+3 patch)" 1.0.1+4
+  check "bump: minor resets patch"            is "$(bump_version 1.2.5+9 minor)" 1.3.0+10
+  check "bump: major resets the rest"         is "$(bump_version 1.2.5+9 major)" 2.0.0+10
+  check "bump: no build number → +1"          is "$(bump_version 1.0.0 build)" 1.0.0+1
+  check "bump: no build number, patch"        is "$(bump_version 1.0.0 patch)" 1.0.1
+  check "bump: pre-release tag dropped"       is "$(bump_version 1.0.0-beta.1 patch)" 1.0.1
+  check "bump: pre-release with build"        is "$(bump_version 2.1.0-rc.2+30 build)" 2.1.0+31
+  nov="$(mktemp -d)"; printf 'name: x\n' > "$nov/pubspec.yaml"; cfg proj_set demo last_version 2026.10.08-1047
+  check "version_guard: date stamp not bumped" is "$(version_guard demo "$nov" 2026.10.08-1047 </dev/null 2>/dev/null)" 2026.10.08-1047
+  rm -rf "$nov"
+  check "version_guard: Enter ships as is"   is "$(version_guard demo "$p" 1.2.3+45 <<<"" 2>/dev/null)" 1.2.3+45
+  check "version_guard: bump, Enter takes hint" is "$(printf '\e[B\n\n' | version_guard demo "$p" 1.2.3+45 2>/dev/null)" 1.2.3+46
+  check "version_guard: pubspec rewritten"    is "$(proj_version "$p")" 1.2.3+46
+  printf 'name: x\nversion: 1.2.3+45\n' > "$p/pubspec.yaml"
+  check "version_guard: bump, typed version"  is "$(printf '\e[B\n2.0.0+50\n' | version_guard demo "$p" 1.2.3+45 2>/dev/null)" 2.0.0+50
+  printf 'name: x\nversion: 1.2.3+45\n' > "$p/pubspec.yaml"
+  check "version_guard: bad input asks again" is "$(printf '\e[B\nabc\n1.3.0+46\n' | version_guard demo "$p" 1.2.3+45 2>/dev/null)" 1.3.0+46
+  printf 'name: x\nversion: 1.2.3+45\n' > "$p/pubspec.yaml"
+  cfg proj_set demo last_version 1.2.3+45
+  check "version_guard: repeat preselects bump" is "$(printf '\n\n' | version_guard demo "$p" 1.2.3+45 2>/dev/null)" 1.2.3+46
+  printf 'name: x\nversion: 1.2.3+45\n' > "$p/pubspec.yaml"
+  check "version_guard: repeat, up keeps it"  is "$(printf '\e[A\n' | version_guard demo "$p" 1.2.3+45 2>/dev/null)" 1.2.3+45
+  check "version_guard: pubspec untouched"    is "$(proj_version "$p")" 1.2.3+45
+  cfg proj_set demo last_version ""
+  DRY=yes
+  check "dry run: version change not written" is "$(printf '\e[B\n\n' | version_guard demo "$p" 1.2.3+45 2>/dev/null; proj_version "$p")" "1.2.3+461.2.3+45"
+  cfg proj_set demo app_id A1; cfg proj_set demo user_id U1; cfg proj_set demo key K1
+  out="$(dry_ship demo "$p" Demo 1.2.3+45 yes "" no "" <<<"q" 2>&1 || true)"
+  check "dry run: checks the app id"          grep -q "appho.st app id is set" <<<"$out"
+  check "dry run: shows the build command"    grep -q "build apk --release" <<<"$out"
+  check "dry run: shows the upload target"    grep -q "appho.st app A1" <<<"$out"
+  check "dry run: says nothing was changed"   grep -q "nothing was built, uploaded, mailed or written" <<<"$out"
+  check "dry run: no last version saved"      is "$(cfg proj_get demo last_version)" ""
+  DRY=no
+  check "pick_notes: Enter uses the commits"   is "$(pick_notes "$p" demo <<<"$enter" 2>/dev/null)" "- second"
+  check "pick_notes: no notes gives nothing"  is "$(pick_notes "$p" demo <<<"${down}${down}${enter}" 2>/dev/null)" ""
+  ed="$(mktemp)"; printf '#!/bin/sh\nprintf "Fixed login\\n# hint\\n" > "$1"\n' > "$ed"; chmod +x "$ed"
+  check "pick_notes: own text, # lines drop"  is "$(VISUAL="$ed" pick_notes "$p" demo <<<"${down}${enter}" 2>/dev/null)" "Fixed login"
+  printf '#!/bin/sh\nprintf "App\\n•\\nNew splash\\n◦\\nfaster\\n" > "$1"\n' > "$ed"; chmod +x "$ed"
+  check "pick_notes: pasted bullets joined"   is "$(VISUAL="$ed" pick_notes "$p" demo <<<"${down}${enter}" 2>/dev/null)" $'App\n- New splash\n  - faster'
+  rm -f "$ed"
+  cfg person_add demo Sam sam@example.com; cfg person_add demo Al al@example.com; cfg person_add demo Lee lee@example.com cc; cfg person_add demo Q q@example.com bcc
+  check "recipients: To + CC + BCC spelled out" is "$(recipients demo)" "2 people + 1 CC + 1 BCC"
+  cfg person_del demo lee@example.com cc; cfg person_del demo q@example.com bcc; cfg person_del demo sam@example.com; cfg person_del demo al@example.com
   cfg proj_set demo path "$p"; cfg proj_set other path /gone/away
   load_projects /tmp; check "app list: no match outside an app"     is "$HIT" -1
   load_projects "$p"; check "app list: this folder's app is found"  is "$HIT" 0
@@ -151,6 +200,14 @@ echo "── ship-site"
   ROOT=/somewhere; check "choose_folder: inside a project uses it"  is "$(choose_folder "")" /somewhere
   check "choose_folder: missing saved folder → current one"        is "$(choose_folder /gone/away)" /somewhere
   ROOT="";         check "choose_folder: outside, saved folder used" is "$(choose_folder "$p")" "$p"
+  printf '{"name":"x","version":"1.0.0","scripts":{"build":"vite build"}}' > "$p/package.json"
+  mkdir -p "$HOME/.config/ship-site/accounts/dryacct"; printf 'bad-token\n' > "$HOME/.config/ship-site/accounts/dryacct/token"
+  out="$(DRY=yes PROD=no dry_deploy dryacct prj_x site "$p" npm 2>&1)"
+  check "dry deploy: build script checked"    grep -q "has a build script" <<<"$out"
+  check "dry deploy: bad login reported"      grep -q "Vercel login failed" <<<"$out"
+  check "dry deploy: deploy command shown"    grep -q "vercel deploy --yes" <<<"$out"
+  check "dry deploy: says nothing changed"    grep -q "nothing was built, deployed or written" <<<"$out"
+  check "dry deploy: package.json untouched"  grep -q '"version":"1.0.0"' "$p/package.json"
   rm -rf "$p" "$st" "$st2"
 )
 

@@ -14,7 +14,7 @@ set -uo pipefail
 if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0); A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.0.5"
+VERSION="1.1.0"
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
 ok(){ printf "     ${G}✓${R} %s\n" "$1" >&2; }
@@ -29,14 +29,23 @@ NOTES=("build a Flutter APK, upload it to appho.st, mail the link"
 # ── menus ─────────────────────────────────────────────────────────────────
 # pick:  one item, Enter picks            -> echoes the index
 # tick:  many items, space toggles, Enter -> echoes the ticked indexes, space separated
+fit(){ # $1 text (may carry colour codes)  $2 width -> the text as is, or cut with … when it would wrap
+  local plain
+  plain="$(printf '%s' "$1" | sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b(B//g')"
+  [ "${#plain}" -le "$2" ] && { printf '%s' "$1"; return; }
+  printf '%s…' "${plain:0:$(( $2 - 1 ))}"
+}
 _keys(){ # shared key loop; $1 mode (pick|tick), rest items. Uses SEL and TICK arrays.
   local mode="$1"; shift
   local items=("$@") n=$# k rest i saved hint
   [ "$mode" = tick ] && hint="↑↓ move · space toggles · Enter continues · q quits" || hint="↑↓ move · Enter picks · q quits"
   saved="$(stty -g 2>/dev/null || true)"
-  [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null; trap 'stty "$saved" 2>/dev/null; exit 130' INT; }
+  printf '\033[?7l' >&2   # no wrapping while the menu is up: a long row is cut, not wrapped, so the redraw stays aligned
+  [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null; trap 'stty "$saved" 2>/dev/null; printf "\033[?7h" >&2; exit 130' INT; }
   printf "     ${D}%s${R}\n" "$hint" >&2
   for ((i=0;i<n;i++)); do printf '\n' >&2; done
+  local w; w=$(( $(tput cols 2>/dev/null || echo 80) - 12 ))
+  for ((i=0;i<n;i++)); do items[$i]="$(fit "${items[$i]}" "$w")"; done
   while :; do
     printf "\033[%dA" "$n" >&2
     for ((i=0;i<n;i++)); do
@@ -53,9 +62,10 @@ _keys(){ # shared key loop; $1 mode (pick|tick), rest items. Uses SEL and TICK a
              case "$rest" in "[A") SEL=$(((SEL-1+n)%n)) ;; "[B") SEL=$(((SEL+1)%n)) ;; esac ;;
       k|K)   SEL=$(((SEL-1+n)%n)) ;;
       j|J)   SEL=$(((SEL+1)%n)) ;;
-      q|Q)   [ -n "$saved" ] && stty "$saved" 2>/dev/null; printf "\n" >&2; exit 0 ;;
+      q|Q)   [ -n "$saved" ] && stty "$saved" 2>/dev/null; printf '\033[?7h\n' >&2; exit 0 ;;
     esac
   done
+  printf '\033[?7h' >&2
   [ -n "$saved" ] && { trap - INT; stty "$saved" 2>/dev/null; }
 }
 pick(){ SEL=0; _keys pick "$@"; printf '%s' "$SEL"; }

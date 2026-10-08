@@ -19,7 +19,7 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.0.5"
+VERSION="1.1.0"
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
 sub(){ printf "     ${D}%s${R}\n" "$1" >&2; }
@@ -123,18 +123,28 @@ PY
 }
 
 # ── menus and prompts ─────────────────────────────────────────────────────
+fit(){ # $1 text (may carry colour codes)  $2 width -> the text as is, or cut with … when it would wrap
+  local plain
+  plain="$(printf '%s' "$1" | sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b(B//g')"
+  [ "${#plain}" -le "$2" ] && { printf '%s' "$1"; return; }
+  printf '%s…' "${plain:0:$(( $2 - 1 ))}"
+}
 MENU_ITEMS=(); MENU_NOTES=()
 menu_pick(){ # $1 title  $2 start index -> echoes chosen index
   local title="$1" n=${#MENU_ITEMS[@]} sel="$2" k rest i saved
   saved="$(stty -g 2>/dev/null || true)"
-  [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null; trap 'stty "$saved" 2>/dev/null; exit 130' INT; }
+  printf '\033[?7l' >&2   # no wrapping while the menu is up: a long row is cut, not wrapped, so the redraw stays aligned
+  [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null; trap 'stty "$saved" 2>/dev/null; printf "\033[?7h" >&2; exit 130' INT; }
   printf "     ${D}%s  · ↑↓ move · Enter picks · q quits${R}\n" "$title" >&2
   for ((i=0;i<n;i++)); do printf '\n' >&2; done
+  # rows are cut to the window width up front: a wrapped row would throw off the cursor-up redraw
+  local w rows=(); w=$(( $(tput cols 2>/dev/null || echo 80) - 8 ))
+  for ((i=0;i<n;i++)); do rows+=("$(fit "${MENU_ITEMS[$i]}${MENU_NOTES[$i]:-}" "$w")"); done
   while :; do
     printf "\033[%dA" "$n" >&2
     for ((i=0;i<n;i++)); do
-      if [ "$i" -eq "$sel" ]; then printf "\r\033[K     ${A}❯ %s${R}%s\n" "${MENU_ITEMS[$i]}" "${MENU_NOTES[$i]:-}" >&2
-      else                         printf "\r\033[K       ${D}%s${R}%s\n" "${MENU_ITEMS[$i]}" "${MENU_NOTES[$i]:-}" >&2; fi
+      if [ "$i" -eq "$sel" ]; then printf "\r\033[K     ${A}❯ %s${R}\n" "${rows[$i]}" >&2
+      else                         printf "\r\033[K       ${D}%s${R}\n" "${rows[$i]}" >&2; fi
     done
     IFS= read -rsn1 k 2>/dev/null || break
     case "$k" in
@@ -143,13 +153,14 @@ menu_pick(){ # $1 title  $2 start index -> echoes chosen index
              case "$rest" in "[A") sel=$(((sel-1+n)%n)) ;; "[B") sel=$(((sel+1)%n)) ;; esac ;;
       k|K)   sel=$(((sel-1+n)%n)) ;;
       j|J)   sel=$(((sel+1)%n)) ;;
-      q|Q)   [ -n "$saved" ] && stty "$saved" 2>/dev/null; printf "\n" >&2; exit 0 ;;
+      q|Q)   [ -n "$saved" ] && stty "$saved" 2>/dev/null; printf '\033[?7h\n' >&2; exit 0 ;;
     esac
   done
+  printf '\033[?7h' >&2
   [ -n "$saved" ] && { trap - INT; stty "$saved" 2>/dev/null; }
   printf '%s' "$sel"
 }
-ask(){ local r; printf "     ${A}%s${R} ${D}[%s]${R} ${A}›${R} " "$1" "${2:-none}" >&2; read -r r; printf '%s' "${r:-$2}"; }
+ask(){ local r; printf "     ${A}%s${R}%s ${A}›${R} " "$1" "${2:+ ${D}[$2]${R}}" >&2; read -r r; printf '%s' "${r:-$2}"; }
 ask_secret(){ # $1 label  $2 saved value -> one * per character typed; Enter on nothing keeps the saved value
   local r="" c
   printf "     ${A}%s${R} ${D}[%s]${R} ${A}›${R} " "$1" "$([ -n "${2:-}" ] && echo 'saved · Enter keeps it' || echo 'none')" >&2
@@ -303,6 +314,7 @@ new_project(){ # -> echoes "account<TAB>id<TAB>name" of a project created by nam
   while :; do
     pname="$(ask "Project name" "$n")"; [ -n "$pname" ] || return 1
     pname="$(slugify "$pname")"
+    [ "$DRY" = yes ] && { ok "would create “${pname}” in “${acct}”  ${D}(dry run, not created)${R}"; return 1; }
     r="$(vc create "$token" "${team:--}" "$pname")" && break
     warn "${r#ERR	}"
   done
@@ -327,6 +339,62 @@ stage_dist(){ # $1 root  $2 stage dir  $3 project id  $4 org id  $5 project name
   printf '{"projectId":"%s","orgId":"%s","projectName":"%s"}' "$3" "$4" "$5" > "$2/.vercel/project.json"
 }
 
+bump_version(){ # $1 version like 1.4.2+17  $2 build|patch|minor|major -> next version
+  local name="${1%%+*}" build="" ma mi pa
+  name="${name%%-*}"   # a pre-release tag (1.0.0-beta.1) is dropped: bumping moves past it
+  case "$1" in *+*) build="${1#*+}" ;; esac
+  IFS=. read -r ma mi pa <<<"$name"; ma="${ma:-0}"; mi="${mi:-0}"; pa="${pa:-0}"
+  case "$2" in
+    patch) pa=$((pa + 1)) ;;
+    minor) mi=$((mi + 1)); pa=0 ;;
+    major) ma=$((ma + 1)); mi=0; pa=0 ;;
+  esac
+  case "$build" in ''|*[!0-9]*) [ "$2" = build ] && build=1 ;; *) build=$((build + 1)) ;; esac
+  printf '%s%s' "$ma.$mi.$pa" "${build:++$build}"
+}
+
+web_version_guard(){ # $1 root -> on a main-website publish, shows the version and bumps package.json only if asked
+  local root="$1" v nv repeat=no
+  v="$(node -p "require('$root/package.json').version||''" 2>/dev/null)"
+  # package.json is plain semver (1.0.0, maybe 1.0.0-beta.1); anything else is left alone
+  echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || return 0
+  [ "$v" = "$(vc proj_get "$root" last_prod_version)" ] && repeat=yes
+  step "Version  ${B}$v${R}$([ "$repeat" = yes ] && printf "  ${Y}live already${R}")"
+  MENU_ITEMS=("publish as $v" "bump"); MENU_NOTES=("" "  ${D}next is $(bump_version "$v" patch), or type your own${R}")
+  [ "$(menu_pick "Version" "$([ "$repeat" = yes ] && echo 1 || echo 0)")" = 0 ] && return 0
+  while :; do
+    nv="$(ask "New version" "$(bump_version "$v" patch)")"
+    echo "$nv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' && break
+    warn "“${nv}” is not a version like 1.0.1"
+  done
+  [ "$nv" = "$v" ] && return 0
+  [ "$DRY" = yes ] && { row "package" "would become version: ${D}$v${R} → ${B}$nv${R}  ${D}(dry run, not written)${R}"; return 0; }
+  cmd "npm version $nv --no-git-tag-version"
+  ( cd "$root" && npm version "$nv" --no-git-tag-version >/dev/null ) || { warn "could not bump package.json — publishing $v"; return 0; }
+  row "package" "version: ${D}$v${R} → ${B}$nv${R}"
+}
+
+dry_deploy(){ # $1 account $2 project id $3 project name $4 folder $5 package manager -> checks, then what would run; changes nothing
+  local acct="$1" pid="$2" pname="$3" root="$4" pm="$5" token team r bad=0
+  token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
+  step "Dry run · checks"
+  [ -n "$(node -p "(require('$root/package.json').scripts||{}).build||''" 2>/dev/null)" ] \
+    && ok "package.json has a build script" || { warn "✗ package.json has no build script"; bad=1; }
+  have "$pm" && ok "$pm is installed" || { warn "✗ $pm is not installed"; bad=1; }
+  r="$(vc user "$token" 2>/dev/null)" && ok "Vercel login works  ${D}${r#*	} · ${acct}${R}" || { warn "✗ Vercel login failed for “${acct}”: ${r#ERR	}"; bad=1; }
+  r="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)" && ok "project “${pname}” is reachable" || { warn "✗ cannot reach project “${pname}”: ${r#ERR	}"; bad=1; }
+
+  step "Dry run · would run"
+  cmd "cd $root && $pm run build"
+  acct_cli "$acct"
+  cmd "vercel deploy --yes $([ "$PROD" = yes ] && echo --prod) $([ "${AUTH[0]}" = --token ] && echo '--token ••••' || printf '%s "%s"' "${AUTH[0]}" "${AUTH[1]}")  ${D}(from a temp copy of dist/)${R}"
+  row "target" "$([ "$PROD" = yes ] && echo 'main website' || echo 'test version')"
+  printf "\n" >&2
+  [ "$bad" = 0 ] && ok "dry run passed — nothing was built, deployed or written" \
+                 || warn "dry run found problems above — nothing was built, deployed or written"
+  printf "\n" >&2
+}
+
 # ── deploy ────────────────────────────────────────────────────────────────
 deploy(){ # $1 account  $2 project id  $3 project name  $4 folder
   local acct="$1" pid="$2" pname="$3" root="$4" pm token team stage url flag domain log
@@ -342,6 +410,9 @@ deploy(){ # $1 account  $2 project id  $3 project name  $4 folder
     MENU_ITEMS=("main website" "test version"); MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}")
     [ "$(menu_pick "Publish to" 0)" = 0 ] && PROD=yes || PROD=no
   fi
+  [ "$PROD" = yes ] && web_version_guard "$root"
+
+  [ "$DRY" = yes ] && { dry_deploy "$acct" "$pid" "$pname" "$root" "$pm"; exit 0; }
 
   stage="$(mktemp -d -t shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
   step "Building"
@@ -365,6 +436,10 @@ deploy(){ # $1 account  $2 project id  $3 project name  $4 folder
   if [ "$PROD" = yes ]; then
     domain="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)"; [ -n "$domain" ] && [ "${domain#ERR}" = "$domain" ] && url="https://$domain"
   fi
+  if [ "$PROD" = yes ]; then
+    vc proj_set "$root" last_prod_version "$(node -p "require('$root/package.json').version||''" 2>/dev/null)"
+    vc proj_set "$root" last_prod_date "$(date '+%d %b %H:%M')"
+  fi
   printf %s "$url" | pbcopy 2>/dev/null
   step "Published"
   row "link" "${B}${A}${url}${R}  ${D}copied${R}"
@@ -372,13 +447,14 @@ deploy(){ # $1 account  $2 project id  $3 project name  $4 folder
 }
 
 # ── main ──────────────────────────────────────────────────────────────────
-PROD=""; ROOT=""
+PROD=""; ROOT=""; DRY=no
 main(){
   local arg rows=() a id nm u f note sel idx r folder
   for arg in "$@"; do
     case "$arg" in
       --prod|--production) PROD=yes ;;
       --preview)           PROD=no ;;
+      --dry-run|-n)        DRY=yes ;;
       accounts)            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "accounts"; accounts_menu; exit 0 ;;
       --version|-V|-v)     echo "ship-site $VERSION"; exit 0 ;;
       -h|--help)
@@ -386,6 +462,7 @@ main(){
         printf "    ${A}ship-site${R}             your Vercel projects; pick one, it builds and publishes\n"
         printf "    ${A}ship-site --prod${R}      straight to the main website, no question asked\n"
         printf "    ${A}ship-site --preview${R}   a fresh preview URL\n"
+        printf "    ${A}ship-site --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
         printf "    ${A}ship-site ~/site${R}      treat that folder as the current project\n"
         printf "    ${A}ship-site accounts${R}    add or remove Vercel accounts\n\n"
         printf "  ${D}Run inside a Vite project and its Vercel project is preselected. Settings live in %s${R}\n\n" "$CONF"
@@ -408,6 +485,7 @@ main(){
   [ -n "$ROOT" ] && ROOT="$(cd "$ROOT" && pwd)"
 
   banner "ship-site $VERSION" "build it, publish it, copy the link"
+  [ "$DRY" = yes ] && sub "${Y}dry run — checks everything, then shows what it would do; nothing is built, deployed, created or written${R}"
   [ -n "$(vc accounts)" ] || { step "No Vercel account on this Mac yet"; add_account >/dev/null || die "no account added"; }
   refresh
 
