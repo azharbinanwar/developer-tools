@@ -253,7 +253,8 @@ elif op in ("fb_domain", "fb_records"):  # token project site domain -> the DNS 
         if recs or cd.get("hostState") == "HOST_ACTIVE": break
         time.sleep(2)
     if not recs: print("live\t%s\t%s" % (cd.get("hostState", ""), cd.get("ownershipState", ""))); sys.exit(0)
-    for r in recs: print("%s\t%s\t%s" % (r["type"], r["domainName"], r["rdata"]))
+    for r in recs:   # records already in place come back too, marked with no action; only the ones to add are shown
+        if r.get("requiredAction", "ADD") == "ADD": print("%s\t%s\t%s" % (r["type"], r["domainName"], r["rdata"]))
 elif op == "label_set":
     labels = d.setdefault("labels", {})
     if a[1]: labels[a[0]] = a[1]
