@@ -62,7 +62,7 @@ For Firebase, nothing has to be set up in your repo: no `firebase init`, no `fir
 
 - **+ new project**: a Vercel project, or a Firebase site — inside one of your existing Firebase projects (`<name>.web.app`), or in a brand-new Firebase project made from just a name (free plan, Hosting only, no billing). The name you type is cleaned to what the host allows (`Admin.Sukun Garden` → `admin-sukun-garden`) and shown back as **create admin-sukun-garden.web.app** before anything is made; **change the name** asks again. With no account on that host yet, it signs you in first. It asks which account only when you have more than one. One Firebase project can hold several sites on the free plan: a landing page on `sukun-garden.web.app` and the admin on `sukun-garden-admin.web.app`, say.
 - **label a project**: your own name for it: `admin`, `landing`, the domain it serves. Shown in the list and when publishing; it changes nothing on Vercel or Firebase. The first time a folder publishes to a project, a label is suggested from the folder name (`SukunGardenAdmin` → `admin`); Enter takes it, type your own, or leave it blank.
-- **custom domain**: connect your own domain or subdomain (`sukungarden.com`, `admin.sukungarden.com`) to a Firebase site. It prints the DNS records to add at your registrar and copies them; Firebase checks them on its own, and once the domain answers the list shows it in place of `<site>.web.app` and the published link uses it. Vercel domains are added on vercel.com, which shows its records there.
+- **custom domain**: connect your own domain or subdomain (`sukungarden.com`, `admin.sukungarden.com`) to a Firebase site. It prints the DNS records to add at your registrar and copies them. The domain is saved for the site at once and shown on its row as **DNS pending**; Firebase checks the records on its own, and once the domain answers the row shows it in place of `<site>.web.app` and the published link uses it. The `.web.app` address keeps working either way. Vercel domains are added on vercel.com, which shows its records there.
 - **accounts**: add or remove Vercel accounts (browser sign-in or a pasted token, then the team scope) and Firebase accounts (Google sign-in in the browser). With no account yet, it starts by adding one.
 
 ### Several accounts
@@ -98,7 +98,19 @@ The exact commands are shown, then run: `npm run build` (or pnpm, yarn or bun fr
 
 ### 6. Done
 
-The link is printed and copied. For the main website it is the project's domain.
+```
+▸ Published
+   link        https://admin.sukungarden.com  copied
+   also        https://sukun-garden-admin.web.app  stays as is
+   console     https://console.firebase.google.com/project/sukun-garden/hosting/sites/sukun-garden-admin
+ ❯ [o]  open the link in the browser
+   [l]  label this project       none yet — admin, landing, the domain it serves
+   [d]  custom domain            admin.sukungarden.com
+   [p]  back to projects
+   [q]  quit
+```
+
+The link is printed and copied; for the main website it is your own domain once one is connected, with the host's address shown too, since it keeps working. Everything you may want to keep is here: label it, connect a domain, open it, or go back and publish another.
 
 ## Dry run
 
@@ -131,6 +143,9 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 | `n` | new project | `project.new` |
 | `l` | label a project | `project.label` |
 | `d` | custom domain | `project.domain` |
+| `o` | open the link in the browser (after publishing) | `done.link` |
+| `l` | label this project (after publishing) | `done.label` |
+| `p` | back to projects (after publishing) | `projects` |
 | `Esc` | back, on Publish to: another project or site | `back` |
 | `c` | create (a new project or site, after its name is shown) | `new.create` |
 | `e` | change the name | `new.rename` |

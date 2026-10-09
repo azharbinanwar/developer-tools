@@ -303,12 +303,17 @@ echo "── ship-site"
   check "vc: bad token → ERR line"            grep -q "^ERR" <<<"$(vc user not-a-token 2>/dev/null || true)"
   check "vc: bad token exits non-zero"        not vc user not-a-token
   vc cache_add me prj_9 site-a site-a.vercel.app; vc proj_set /tmp/site-a id prj_9
-  check "landing: cached row with its folder" is "$(vc landing)" $'me\x1fprj_9\x1fsite-a\x1fsite-a.vercel.app\x1f/tmp/site-a\x1fvercel\x1f\x1f\x1f\x1f'
+  check "landing: cached row with its folder" is "$(vc landing)" $'me\x1fprj_9\x1fsite-a\x1fsite-a.vercel.app\x1f/tmp/site-a\x1fvercel\x1f\x1f\x1f\x1f\x1f'
   vc stat_add prj_9; vc stat_add prj_9
   check "stats: count and last date on the row" is "$(vc landing | cut -d$'\x1f' -f9,10 | tr $'\x1f' ' ')" "2 today"
   check "stats: stat_get"                       is "$(vc stat_get prj_9 | tr '\t' ' ')" "2 today"
   check "stats: none is blank"                  is "$(vc stat_get nothing | tr '\t' ' ')" "0 "
   check "url_get: the cached url"               is "$(vc url_get prj_9)" site-a.vercel.app
+  vc domain_set prj_9 site-a.com
+  check "domain: saved per project"             is "$(vc domain_get prj_9)" site-a.com
+  check "domain: on the landing row"            is "$(vc landing | cut -d$'\x1f' -f11)" site-a.com
+  vc domain_set prj_9 ""
+  check "domain: blank removes it"              is "$(vc domain_get prj_9)" ""
   check "fb_token: nothing without a CLI login" is "$(vc fb_token a@x.com)" ""
   mkdir -p "$HOME/.config/configstore"; printf '{"user":{"email":"a@x.com"},"tokens":{"access_token":"tokA","expires_at":%s},"additionalAccounts":[{"user":{"email":"b@x.com"},"tokens":{"access_token":"tokB","expires_at":%s}}]}' "$(( ($(date +%s) + 3600) * 1000 ))" "$(( ($(date +%s) - 10) * 1000 ))" > "$HOME/.config/configstore/firebase-tools.json"
   check "fb_token: the default account's token" is "$(vc fb_token a@x.com)" tokA
@@ -422,7 +427,7 @@ FAKE
 m${US}prj_v2${US}my-app${US}my-app.vercel.app${US}${US}vercel${US}
 g@x${US}shop-1/shop-1${US}shop-1${US}shop-1.web.app${US}${US}firebase${US}
 g@x${US}other/other${US}other${US}other.web.app${US}/the/folder${US}firebase${US}"
-  rr(){ rank_rows "$@" <<<"$landing" | cut -d"$US" -f3,11 | tr "$US" ' '; }
+  rr(){ rank_rows "$@" <<<"$landing" | cut -d"$US" -f3,12 | tr "$US" ' '; }
   check "rank: saved folder path wins"             grep -qx "other 0" <<<"$(rr /the/folder "" "" "" "")"
   check "rank: .firebaserc project is config"      grep -qx "shop-1 1" <<<"$(rr /x shop-1 "" "" "")"
   check "rank: firebase.json site is config"       grep -qx "shop-1 1" <<<"$(rr /x "" shop-1 "" "")"
@@ -435,7 +440,7 @@ g@x${US}other/other${US}other${US}other.web.app${US}/the/folder${US}firebase${US
 g@x${US}other/other${US}other${US}other.web.app${US}${US}firebase${US}
 g@x${US}shop-1/shop-admin${US}shop-admin${US}shop-admin.web.app${US}${US}firebase${US}${US}Shop"
   check "sites: a project's sites stay together"   is "$(rank_rows /x "" "" "" "" <<<"$two" | cut -d"$US" -f3 | tr '\n' ' ')" "shop-1 shop-admin other "
-  check "sites: each row knows its project's size" is "$(rank_rows /x "" "" "" "" <<<"$two" | cut -d"$US" -f13 | tr '\n' ' ')" "2 2 1 "
+  check "sites: each row knows its project's size" is "$(rank_rows /x "" "" "" "" <<<"$two" | cut -d"$US" -f14 | tr '\n' ' ')" "2 2 1 "
   check "label guess: admin from the folder"       is "$(guess_label /x/SukunGardenAdmin)" admin
   check "label guess: landing from a web folder"   is "$(guess_label /x/sukun-garden-web)" landing
   check "label guess: nothing from a plain name"   is "$(guess_label /x/thoub)" ""
@@ -494,6 +499,12 @@ FAKE
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "myp" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy: a linked folder is not asked again"         not grep -q "Label for" <<<"$out"
   check "deploy: the label heads the screen"                 grep -q "▸ admin" <<<"$out"
+  check "done: back to projects returns"                     bash -c 'source ./ship-site/ship-site; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp'
+  out="$(bash -c 'source ./ship-site/ship-site; URL=https://x; printf "lmine\np" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
+  check "done: console link shown"                           grep -q "console.firebase.google.com/project/shop-1/hosting/sites/shop-1" <<<"$out"
+  check "done: label saved from the done screen"             is "$(vc label_get shop-1/shop-1)" mine
+  check "done: a saved domain shows on the screen"           bash -c 'source ./ship-site/ship-site; vc domain_set shop-1/shop-1 shop.example.com; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp 2>&1 | grep -q shop.example.com'
+  vc domain_set shop-1/shop-1 ""
   # cache: a young cache skips the refresh, a stale one runs it
   vc stamp; check "refresh fresh: young cache returns at once" bash -c "source ./ship-site/ship-site; refresh fresh; [ \"\$(vc age)\" -lt 5 ]"
   # removed Firebase account disappears from the list
