@@ -492,12 +492,11 @@ FAKE
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "mx" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy: main website by key, then not y → cancelled" grep -q "cancelled — nothing was published" <<<"$out"
   check "deploy: a cancelled publish links nothing"          is "$(vc proj_get "$p" id)" ""
-  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "myadmin\np" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
-  check "deploy: first link from a folder asks for a label"  grep -q "Label for shop-1" <<<"$out"
-  check "deploy: the label is saved"                         is "$(vc label_get shop-1/shop-1)" admin
-  check "deploy: the folder is linked"                       is "$(vc proj_get "$p" id)" shop-1/shop-1
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "myp" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
-  check "deploy: a linked folder is not asked again"         not grep -q "Label for" <<<"$out"
+  check "deploy: no label question in the flow"              not grep -q "Label for" <<<"$out"
+  check "deploy: the folder is linked"                       is "$(vc proj_get "$p" id)" shop-1/shop-1
+  vc label_set shop-1/shop-1 admin
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "myp" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy: the label heads the screen"                 grep -q "▸ admin" <<<"$out"
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "dadmin.shop.dev\nr\e" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "publish-to: custom domain saved from that screen"   is "$(vc domain_get shop-1/shop-1)" admin.shop.dev

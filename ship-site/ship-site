@@ -857,11 +857,7 @@ guess_label(){ # $1 folder -> a label guessed from its name: admin, dashboard, l
     *docs*)                         echo docs ;;
   esac
 }
-ask_label(){ # $1 id  $2 name  $3 folder -> asks for a label once, guessed from the folder; blank keeps none
-  local g l; g="$(guess_label "$3")"
-  l="$(ask "Label for ${2}, so you tell it apart later$([ -n "$g" ] && echo " (guessed from the folder name)")" "$g")"
-  [ -n "$l" ] && { vc label_set "$1" "$l"; ok "labelled “${l}”"; }
-}
+
 outdir(){ # $1 root -> the build output folder with an index.html: dist (Vite), build (Create React App), out (Next.js export), _site (Eleventy, Jekyll)
   local d; for d in dist build out _site; do [ -f "$1/$d/index.html" ] && { printf '%s' "$d"; return; }; done
 }
@@ -1105,7 +1101,6 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   # remember which project this folder publishes to — not in a dry run, which writes nothing
   if [ "$DRY" != yes ] && [ "$(vc proj_get "$root" id)" != "$pid" ]; then
     vc proj_set "$root" account "$acct"; vc proj_set "$root" id "$pid"; vc proj_set "$root" name "$pname"; vc proj_set "$root" host "$host"
-    [ -n "$(vc label_get "$pid")" ] || ask_label "$pid" "$pname" "$root"
   fi
   [ "$PROD" = yes ] && web_version_guard "$root"
 
