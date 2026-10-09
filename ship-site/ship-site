@@ -381,6 +381,7 @@ remove it|account.remove|d
 sign it out|account.signout|d
 personal|scope.personal|p
 open the link in the browser|done.link|o
+check the domain again|domain.check|c
 label this project|done.label|l
 back to projects|projects|p
 back|back|esc
@@ -1030,7 +1031,7 @@ publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
   row "link" "${B}${A}${url}${R}  ${D}copied${R}"
   [ -n "$also" ] && row "also" "${also}  ${D}stays as is${R}"
   URL="$url"; ALSO="$also"
-  pending_records "$acct" "${proj}/${site}"
+  domain_status "$acct" "${proj}/${site}" || true
 }
 
 custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  $4 name -> saves the domain; on Firebase connects it and prints the DNS records to add
@@ -1082,13 +1083,21 @@ show_records(){ # $1 project $2 site $3 domain $4 records (type<TAB>host<TAB>val
   sub "shown again after every publish until it is live; the list then shows ${dom} in place of ${site}.web.app"
   printf "\n" >&2
 }
-pending_records(){ # $1 account $2 project/site -> after a publish: the records still to add for a saved domain that is not live yet
-  local acct="$1" proj="${2%%/*}" site="${2#*/}" dom tok out
+domain_status(){ # $1 account $2 project/site -> one line on a saved domain: live, or what Firebase still waits to see; true once live
+  local acct="$1" proj="${2%%/*}" site="${2#*/}" dom tok out t h v base need=""
   dom="$(vc domain_get "$2")"; [ -n "$dom" ] || return 0
-  [ "$(vc url_get "$2")" = "$dom" ] && return 0
-  tok="$(fb_token_for "$acct")"; [ -n "$tok" ] || return 0
-  if out="$(vc fb_records "$tok" "$proj" "$site" "$dom")"; then show_records "$proj" "$site" "$dom" "$out"
-  else warn "${dom} is saved but ${out#ERR	} — custom domain › connect it now"; fi
+  [ "$(vc url_get "$2")" = "$dom" ] && { row "domain" "${dom}  ${G}live${R}"; return 0; }
+  tok="$(fb_token_for "$acct")"; [ -n "$tok" ] || return 1
+  out="$(vc fb_records "$tok" "$proj" "$site" "$dom")" || { warn "${dom} is saved but ${out#ERR	} — custom domain › connect it now"; return 1; }
+  if [ "${out%%	*}" = live ]; then vc fb_refresh 2>/dev/null; row "domain" "${dom}  ${G}live now${R}  ${D}the list shows it from here on${R}"; return 0; fi
+  base="$(printf '%s' "$dom" | awk -F. '{print $(NF-1)"."$NF}')"
+  while IFS=$'\t' read -r t h v; do
+    [ -n "$t" ] || continue
+    case "$h" in "$base") h="@" ;; *".$base") h="${h%.$base}" ;; esac
+    need="${need:+$need, }${t} ${h}"
+  done <<<"$out"
+  row "domain" "${dom}  ${Y}waiting for DNS${R}  ${D}Firebase has not seen yet: ${need} — added already: DNS takes up to an hour; d shows the records${R}"
+  return 1
 }
 
 # ── deploy ────────────────────────────────────────────────────────────────
@@ -1188,20 +1197,27 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
 
 URL=""; ALSO=""; DONE_ID=""; DONE_NAME=""
 done_menu(){ # $1 host $2 account $3 project id $4 name $5 folder -> after a publish: the details to copy, then what next
-  local host="$1" acct="$2" pid="$3" pname="$4" root="$5" l
+  local host="$1" acct="$2" pid="$3" pname="$4" root="$5" l dom pend idx
   [ "$host" = firebase ] && row "console" "https://console.firebase.google.com/project/${pid%%/*}/hosting/sites/${pid#*/}" \
                          || row "console" "https://vercel.com/$(vc acct_get "$acct" scope)/${pname}"
   while :; do
     l="$(vc label_get "$pid")"
-    MENU_ITEMS=("open the link in the browser" "label this project" "custom domain" "back to projects" "quit")
-    MENU_NOTES=("  ${D}${URL}${R}" "  ${D}${l:-$pname} — admin, landing, the domain it serves; change it any time${R}"
-                "  ${D}$(vc domain_get "$pid")${R}" "" "")
+    MENU_ITEMS=("open the link in the browser" "label this project" "custom domain")
+    MENU_NOTES=("  ${D}${URL}${R}" "  ${D}${l:-$pname} — admin, landing, the domain it serves; change it any time${R}" "  ${D}$(vc domain_get "$pid")${R}")
+    dom="$(vc domain_get "$pid")"; pend=""
+    if [ "$host" = firebase ] && [ -n "$dom" ] && [ "$(vc url_get "$pid")" != "$dom" ]; then
+      pend=yes; MENU_ITEMS+=("check the domain again"); MENU_NOTES+=("  ${D}asks Firebase whether ${dom} is live yet${R}")
+    fi
+    MENU_ITEMS+=("back to projects" "quit"); MENU_NOTES+=("" "")
     printf "\n" >&2
-    case "$(menu_pick "Next" 3)" in
+    idx="$(menu_pick "Next" $(( ${#MENU_ITEMS[@]} - 2 )))"
+    [ -n "$pend" ] || [ "$idx" -lt 3 ] || idx=$((idx + 1))   # without the check row, the rows after it shift up by one
+    case "$idx" in
       0) open_it "$URL" || warn "could not open a browser — the link is copied" ;;
       1) vc label_set "$pid" "$(ask "Label for ${pname}" "${l:-$pname}")"; ok "saved" ;;
       2) custom_domain "$host" "$acct" "$pid" "$pname" ;;
-      3) return 0 ;;
+      3) domain_status "$acct" "$pid" || true ;;
+      4) return 0 ;;
       *) printf "\n" >&2; exit 0 ;;
     esac
   done

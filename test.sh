@@ -576,7 +576,11 @@ FAKE
   check "records: _acme-challenge host kept short"           grep -q "_acme-challenge.admin" <<<"$out"
   check "records: @ for the domain itself"                   grep -q "A      @" <<<"$out"
   check "records: live means nothing to add"                 grep -q "connected and live" <<<"$(bash -c 'source ./ship-site/ship-site; show_records shop-1 shop-1 a.example.com "live	HOST_ACTIVE"' 2>&1)"
-  check "pending: nothing without a saved domain"            is "$(bash -c 'source ./ship-site/ship-site; pending_records a@x.com shop-1/shop-1' 2>&1)" ""
+  check "status: nothing without a saved domain"             is "$(bash -c 'source ./ship-site/ship-site; domain_status a@x.com shop-1/shop-1' 2>&1)" ""
+  out="$(bash -c 'source ./ship-site/ship-site; vc domain_set shop-1/shop-1 shop.dev; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
+  check "done: a pending domain adds the check option"       grep -q "check the domain again" <<<"$out"
+  out="$(bash -c 'source ./ship-site/ship-site; vc domain_set shop-1/shop-1 ""; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
+  check "done: no check option without a domain"             not grep -q "check the domain again" <<<"$out"
   check "domain: y keeps an odd ending"                      bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nyr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' && [ "$(vc domain_get shop-1/shop-1)" = admin.sukungarden ]
   vc domain_set shop-1/shop-1 ""; vc domain_set prj_9 ""
   # cache: a young cache skips the refresh, a stale one runs it
