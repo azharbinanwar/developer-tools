@@ -1,6 +1,6 @@
 # ship-site
 
-Build a web app, publish only its build folder to **Vercel** or **Firebase Hosting**, copy the link. Works with Vite (React, Vue, Svelte…), Create React App, Next.js static export, Eleventy, Jekyll: anything whose build script leaves an `index.html` in `dist/`, `build/`, `out/` or `_site/`. Several accounts on each, side by side, with no long commands to remember.
+Build a web app, publish only its build folder to **Vercel** or **Firebase Hosting**, copy the link. Works with Vite (React, Vue, Svelte…), Create React App, Next.js static export, Eleventy, Jekyll: anything whose build script leaves an `index.html` in `dist/`, `build/`, `out/` or `_site/`. Plain static sites too: no build, the folder holding `index.html` goes up as it is. Several accounts on each, side by side, with no long commands to remember.
 
 ## Run it
 
@@ -109,7 +109,14 @@ Enter publishes as is. **bump** asks `New version [1.0.1] ›`: Enter takes it, 
 
 ### 5. Build and publish
 
-The exact commands are shown, then run: `npm run build` (or pnpm, yarn or bun from the lockfile), then the deploy from a temporary copy of the build output (the first of `dist/`, `build/`, `out/`, `_site/` that holds an `index.html`) outside your git repo. No source, `node_modules`, `.env` or git commit info leaves your Mac, so Vercel's commit-author check never blocks it. For Firebase the copy gets its own `firebase.json`, keeping your project's redirects, headers and rewrites; nothing is added to your repo. The copy is deleted afterwards. If the build or deploy fails, the host's error is shown and it stops.
+The exact commands are shown, then run: `npm run build` (or pnpm, yarn or bun from the lockfile), then the deploy from a temporary copy of the build output (the first of `dist/`, `build/`, `out/`, `_site/` that holds an `index.html`) outside your git repo.
+
+**Static sites** have no build step. With no `build` script in `package.json` (or no `package.json` at all), the folder holding `index.html` is the site: the project folder itself, or `site/`, `public/`, `www/`, `docs/`, `static/`, in that order. It goes up whole, with `.well-known/`, `og-image.png`, `robots.txt`, `llms.txt`, fonts and `privacy/index.html` all at the root, minus `.git`, `node_modules`, `.idea`, `.env*` and `.DS_Store`. Real pages are served as such: `/privacy` opens `privacy/index.html`, and there is no single-page rewrite. The Publishing step says so:
+
+```
+▸ Files
+   folder      /Users/azharali/Desktop/mine/SukunGardenWeb/site  no build — published as they are, 47 files
+``` No source, `node_modules`, `.env` or git commit info leaves your Mac, so Vercel's commit-author check never blocks it. For Firebase the copy gets its own `firebase.json`, keeping your project's redirects, headers and rewrites; nothing is added to your repo. The copy is deleted afterwards. If the build or deploy fails, the host's error is shown and it stops.
 
 ### 6. Done
 
@@ -139,7 +146,7 @@ The link is printed and copied; for the main website it is your own domain once 
 | add or remove an account | ✅ runs |
 | new Vercel project | ⏭ says it would create it |
 | version | ⏭ shows the new version, does not touch `package.json` |
-| build script in `package.json` | ✅ checked |
+| build script in `package.json`, or the static folder and its file count | ✅ checked |
 | package manager installed | ✅ checked |
 | Vercel login and project access | ✅ checked (read-only) |
 | Firebase CLI, signed-in account, site reachable | ✅ checked (read-only) |
@@ -203,7 +210,7 @@ bash, python3 and node on macOS, Linux or Windows (Git Bash or WSL), plus the CL
 | Firebase sign-ins | the Firebase CLI's own store (`firebase login:list`) |
 | Your normal `vercel login` | untouched |
 
-A `vercel.json` in your project root is uploaded with the build. Without one, a single-page-app rewrite is added so deep links work; Firebase gets the same rewrite unless your `firebase.json` has its own. The only file it changes in your project is `package.json`'s version, and only when you pick **bump**.
+A `vercel.json` in your project root is uploaded with the build. Without one, an app gets a single-page rewrite so deep links work, and a static site gets `cleanUrls` instead; Firebase gets the same unless your `firebase.json` has its own. The only file it changes in your project is `package.json`'s version, and only when you pick **bump**.
 
 ## Left out on purpose
 

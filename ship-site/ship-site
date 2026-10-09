@@ -564,7 +564,7 @@ add_fb_account(){ # signs one more Google account into the Firebase CLI; the CLI
   need_firebase
   step "Add a Firebase account"
   sub "signs in with Google in the browser — nothing to copy"
-  if firebase login:list 2>/dev/null | grep -Eq '[A-Za-z0-9._%+-]+@'; then
+  if firebase login:list 2>/dev/null | grep -E '[A-Za-z0-9._%+-]+@' >/dev/null; then
     cmd "firebase login:add"; firebase login:add >&2 || { warn "sign-in did not finish"; return 1; }
   else
     cmd "firebase login"; firebase login >&2 || { warn "sign-in did not finish"; return 1; }
@@ -649,12 +649,12 @@ choose_folder(){ # $1 folder this project was last built from -> echoes the fold
     step "Which folder to build"
     [ "$(menu_pick "Build" 0)" = 0 ] && printf '%s' "$ROOT" || printf '%s' "$saved"; return
   fi
-  [ -n "$saved" ] && [ -f "$saved/package.json" ] && { printf '%s' "$saved"; return; }
+  [ -n "$saved" ] && is_project "$saved" && { printf '%s' "$saved"; return; }
   step "Which folder to build"
   while :; do
     p="$(ask "Project folder" "")"; [ -n "$p" ] || return 1; p="${p/#\~/$HOME}"
-    [ -f "$p/package.json" ] && { ( cd "$p" && pwd ); return; }
-    warn "no package.json in $p"
+    is_project "$p" && { ( cd "$p" && pwd ); return; }
+    warn "no package.json and no index.html in $p"
   done
 }
 
@@ -829,7 +829,16 @@ for g in sorted(groups, key=lambda g: (best(g), g[0] != "vercel", g[1].lower()))
 ' "$@"
 }
 
-find_root(){ local d="$PWD"; while [ "$d" != "/" ]; do [ -f "$d/package.json" ] && { printf '%s' "$d"; return; }; d="$(dirname "$d")"; done; return 1; }
+find_root(){ local d="$PWD"; while [ "$d" != "/" ]; do is_project "$d" && { printf '%s' "$d"; return; }; d="$(dirname "$d")"; done; return 1; }
+is_project(){ [ -f "$1/package.json" ] || [ -n "$(web_root "$1")" ]; }   # something to build, or plain files to publish
+has_build(){ [ -n "$(node -p "(require('$1/package.json').scripts||{}).build||''" 2>/dev/null)" ]; }
+web_root(){ # $1 root -> the folder of a static site, the one holding index.html: here, site/, public/, www/, docs/, static/
+  local d; for d in . site public www docs static; do [ -f "$1/$d/index.html" ] && { printf '%s' "$d"; return; }; done
+}
+nfiles(){ local n; n="$(find "$1" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/.idea/*' -not -name .DS_Store | wc -l | tr -d ' ')"; printf '%s file%s' "$n" "$([ "$n" = 1 ] || echo s)"; }
+clean_stage(){ # $1 folder -> what never belongs on a website: the repo, modules, editor files, secrets
+  rm -rf "$1/.git" "$1/node_modules" "$1/.idea" "$1/.vscode"; rm -f "$1"/.env "$1"/.env.*; find "$1" -name .DS_Store -delete 2>/dev/null; :
+}
 detect_pm(){ # $1 root -> the package manager whose lockfile is there, npm otherwise
   if   [ -f "$1/pnpm-lock.yaml" ]; then echo pnpm
   elif [ -f "$1/yarn.lock" ];      then echo yarn
@@ -858,22 +867,37 @@ guess_label(){ # $1 folder -> a label guessed from its name: admin, dashboard, l
   esac
 }
 
-outdir(){ # $1 root -> the build output folder with an index.html: dist (Vite), build (Create React App), out (Next.js export), _site (Eleventy, Jekyll)
+outdir(){ # $1 root -> the folder to publish: the build output (dist for Vite, build for Create React App, out for a Next.js export, _site for Eleventy or Jekyll), else a static site's web root
   local d; for d in dist build out _site; do [ -f "$1/$d/index.html" ] && { printf '%s' "$d"; return; }; done
+  has_build "$1" || web_root "$1"
+}
+STATIC=""   # set by deploy when the project has no build: its files are published as they are
+build_or_files(){ # $1 root $2 package manager $3 stage -> runs the build, or for a static site names the files that go up as they are
+  local root="$1" pm="$2" log="$3-build.log"
+  if [ -n "$STATIC" ]; then
+    step "Files"
+    row "folder" "${root}/${STATIC#./}  ${D}no build — published as they are, $(nfiles "$root/$STATIC")${R}"
+    return
+  fi
+  step "Building"
+  cmd "cd $root && $pm run build"
+  ( cd "$root" && $pm run build ) > >(tee "$log" >&2) 2>&1 || { fail "the build failed — nothing was published" "$log"; }
+  [ -n "$(outdir "$root")" ] || die "no index.html in dist/, build/, out/ or _site/ after the build — where does your build put its files?"
 }
 stage_dist(){ # $1 root  $2 stage dir  $3 project id  $4 org id  $5 project name
-  cp -R "$1/$(outdir "$1")/." "$2/" || return 1
+  cp -R "$1/$(outdir "$1")/." "$2/" || return 1; clean_stage "$2"
   [ -f "$1/vercel.json" ] && cp "$1/vercel.json" "$2/vercel.json"
-  [ -f "$2/vercel.json" ] || printf '{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}' > "$2/vercel.json"
+  # an app gets the single-page rewrite so deep links work; a static site keeps its real pages, with /privacy serving privacy/index.html
+  [ -f "$2/vercel.json" ] || { [ -n "$STATIC" ] && printf '{"cleanUrls":true}' || printf '{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}'; } > "$2/vercel.json"
   mkdir -p "$2/.vercel"
   printf '{"projectId":"%s","orgId":"%s","projectName":"%s"}' "$3" "$4" "$5" > "$2/.vercel/project.json"
 }
 
 stage_firebase(){ # $1 root  $2 stage dir  $3 site -> build output in <stage>/public plus a firebase.json for it
-  mkdir -p "$2/public" && cp -R "$1/$(outdir "$1")/." "$2/public/" || return 1
-  py - "$1/firebase.json" "$2/firebase.json" "$3" <<'PY2'
+  mkdir -p "$2/public" && cp -R "$1/$(outdir "$1")/." "$2/public/" || return 1; clean_stage "$2/public"
+  py - "$1/firebase.json" "$2/firebase.json" "$3" "$STATIC" <<'PY2'
 import json, os, sys
-src, dst, site = sys.argv[1:4]
+src, dst, site, static = sys.argv[1:5]
 h = {}
 if os.path.exists(src):
     try:
@@ -882,8 +906,10 @@ if os.path.exists(src):
     except Exception: h = {}
 # the project's own redirects, headers and rewrites come along; where the files are and which site is ours
 out = {k: v for k, v in h.items() if k in ("rewrites", "redirects", "headers", "cleanUrls", "trailingSlash", "i18n", "appAssociation")}
-out.update(site=site, public="public", ignore=["firebase.json", "**/.*"])
-out.setdefault("rewrites", [{"source": "**", "destination": "/index.html"}])
+# dotfiles stay, .well-known above all (app links live there); the copy was cleaned of .git and the like already
+out.update(site=site, public="public", ignore=["firebase.json", "**/.DS_Store", "**/.htaccess"])
+if static: out.setdefault("cleanUrls", True)                 # real pages: /privacy serves privacy/index.html
+else: out.setdefault("rewrites", [{"source": "**", "destination": "/index.html"}])   # an app: deep links open index.html
 json.dump({"hosting": out}, open(dst, "w"), indent=2)
 PY2
 }
@@ -923,19 +949,22 @@ web_version_guard(){ # $1 root -> on a main-website publish, shows the version a
   row "package" "version: ${D}$v${R} → ${B}$nv${R}"
 }
 
+dry_source(){ # $1 root $2 package manager -> says whether a build runs or files go up as they are; false when neither can
+  if [ -n "$STATIC" ]; then ok "static site: ${STATIC#./}/ with $(nfiles "$1/$STATIC") — no build, published as they are"; return 0; fi
+  has_build "$1" && ok "package.json has a build script" || { warn "✗ package.json has no build script"; return 1; }
+  have "$2" && ok "$2 is installed" || { warn "✗ $2 is not installed"; return 1; }
+}
 dry_deploy(){ # $1 account $2 project id $3 project name $4 folder $5 package manager -> checks, then what would run; changes nothing
   local acct="$1" pid="$2" pname="$3" root="$4" pm="$5" token team r bad=0
   token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
   step "Dry run · checks"
-  [ -n "$(node -p "(require('$root/package.json').scripts||{}).build||''" 2>/dev/null)" ] \
-    && ok "package.json has a build script" || { warn "✗ package.json has no build script"; bad=1; }
-  have "$pm" && ok "$pm is installed" || { warn "✗ $pm is not installed"; bad=1; }
+  dry_source "$root" "$pm" || bad=1
   have vercel && ok "Vercel CLI is installed  ${D}$(vercel --version 2>/dev/null | head -1)${R}" || { warn "✗ the Vercel CLI is not installed  ${D}npm i -g vercel${R}"; bad=1; }
   r="$(vc user "$token" 2>/dev/null)" && ok "Vercel login works  ${D}${r#*	} · ${acct}${R}" || { warn "✗ Vercel login failed for “${acct}”: ${r#ERR	}"; bad=1; }
   r="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)" && ok "project “${pname}” is reachable" || { warn "✗ cannot reach project “${pname}”: ${r#ERR	}"; bad=1; }
 
   step "Dry run · would run"
-  cmd "cd $root && $pm run build"
+  [ -n "$STATIC" ] || cmd "cd $root && $pm run build"
   acct_cli "$acct"
   cmd "vercel deploy --yes $([ "$PROD" = yes ] && echo --prod) $([ "${AUTH[0]}" = --token ] && echo '--token ••••' || printf '%s "%s"' "${AUTH[0]}" "${AUTH[1]}")  ${D}(from a temp copy of dist/)${R}"
   row "target" "$([ "$PROD" = yes ] && echo 'main website' || echo 'test version')"
@@ -948,21 +977,19 @@ dry_deploy(){ # $1 account $2 project id $3 project name $4 folder $5 package ma
 dry_deploy_firebase(){ # $1 account $2 project/site $3 folder $4 package manager -> checks, then what would run; changes nothing
   local acct="$1" proj="${2%%/*}" site="${2#*/}" root="$3" pm="$4" bad=0
   step "Dry run · checks"
-  [ -n "$(node -p "(require('$root/package.json').scripts||{}).build||''" 2>/dev/null)" ] \
-    && ok "package.json has a build script" || { warn "✗ package.json has no build script"; bad=1; }
-  have "$pm" && ok "$pm is installed" || { warn "✗ $pm is not installed"; bad=1; }
+  dry_source "$root" "$pm" || bad=1
   if have firebase; then
     ok "Firebase CLI is installed  ${D}$(firebase --version 2>/dev/null)${R}"
-    firebase login:list 2>/dev/null | grep -qF "$acct" && ok "signed in as $acct" || { warn "✗ $acct is not signed in to the Firebase CLI"; bad=1; }
-    firebase hosting:sites:list --project "$proj" --account "$acct" --json 2>/dev/null | grep -q "sites/$site\"" \
+    firebase login:list 2>/dev/null | grep -F "$acct" >/dev/null && ok "signed in as $acct" || { warn "✗ $acct is not signed in to the Firebase CLI"; bad=1; }
+    firebase hosting:sites:list --project "$proj" --account "$acct" --json 2>/dev/null | grep "sites/$site\"" >/dev/null \
       && ok "site “${site}” in project ${proj} is reachable" || { warn "✗ cannot reach site “${site}” in project ${proj}"; bad=1; }
   else
     warn "✗ the Firebase CLI is not installed  ${D}npm i -g firebase-tools${R}"; bad=1
   fi
 
   step "Dry run · would run"
-  cmd "cd $root && $pm run build"
-  if [ "$PROD" = yes ]; then cmd "firebase deploy --only hosting --project $proj --account $acct  ${D}(from a temp copy of the build)${R}"
+  [ -n "$STATIC" ] || cmd "cd $root && $pm run build"
+  if [ "$PROD" = yes ]; then cmd "firebase deploy --only hosting --project $proj --account $acct  ${D}(from a temp copy of the $([ -n "$STATIC" ] && echo files || echo build))${R}"
   else cmd "firebase hosting:channel:deploy preview --expires 7d --project $proj --account $acct"; fi
   row "target" "$([ "$PROD" = yes ] && echo "main website  ${D}${site}.web.app${R}" || echo 'test version  a preview URL for 7 days')"
   printf "\n" >&2
@@ -974,11 +1001,7 @@ dry_deploy_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
 publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
   local acct="$1" proj="${2%%/*}" site="${2#*/}" root="$3" pm="$4" stage log url out also=""
   stage="$(tmpd shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
-  step "Building"
-  cmd "cd $root && $pm run build"
-  log="$stage-build.log"
-  ( cd "$root" && $pm run build ) > >(tee "$log" >&2) 2>&1 || { fail "the build failed — nothing was published" "$log"; }
-  [ -n "$(outdir "$root")" ] || die "no index.html in dist/, build/, out/ or _site/ after the build — where does your build put its files?"
+  build_or_files "$root" "$pm" "$stage"
   # published from a copy with its own firebase.json: nothing is added to your repo
   stage_firebase "$root" "$stage" "$site" || die "could not copy the build output"
 
@@ -1055,8 +1078,11 @@ custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  
 # ── deploy ────────────────────────────────────────────────────────────────
 deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 folder  $5 host (vercel|firebase)
   local acct="$1" pid="$2" pname="$3" root="$4" host="${5:-vercel}" pm token team stage url flag domain log label also idx site
-  [ -f "$root/package.json" ] || die "no package.json in $root"
-  pm="$(detect_pm "$root")"
+  pm="$(detect_pm "$root")"; STATIC=""
+  if ! has_build "$root"; then
+    STATIC="$(web_root "$root")"
+    [ -n "$STATIC" ] || die "nothing to publish in $root — no build script in package.json, and no index.html here or in site/, public/, www/, docs/ or static/"
+  fi
   [ "$DRY" = yes ] || { [ "$host" = firebase ] && need_firebase || need_vercel; }   # before any question or write
   while :; do
     label="$(vc label_get "$pid")"; domain="$(vc domain_get "$pid")"
@@ -1114,11 +1140,7 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   [ "$DRY" = yes ] && { dry_deploy "$acct" "$pid" "$pname" "$root" "$pm"; exit 0; }
 
   stage="$(tmpd shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
-  step "Building"
-  cmd "cd $root && $pm run build"
-  log="$stage-build.log"
-  ( cd "$root" && $pm run build ) > >(tee "$log" >&2) 2>&1 || { fail "the build failed — nothing was published" "$log"; }
-  [ -n "$(outdir "$root")" ] || die "no index.html in dist/, build/, out/ or _site/ after the build — where does your build put its files?"
+  build_or_files "$root" "$pm" "$stage"
 
   # publish from a copy outside the repo: no .git above it, so Vercel attaches no commit
   stage_dist "$root" "$stage" "$pid" "$(vc acct_get "$acct" org_id)" "$pname" || die "could not copy dist/"
@@ -1190,12 +1212,12 @@ main(){
         printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts\n\n"
         printf "  ${D}Run inside a web project and the project it publishes to is preselected. Settings live in %s${R}\n\n" "$CONF"
         exit 0 ;;
-      *) ROOT="${arg/#\~/$HOME}"; [ -f "$ROOT/package.json" ] || die "no package.json in $ROOT" ;;
+      *) ROOT="${arg/#\~/$HOME}"; is_project "$ROOT" || die "no package.json and no index.html in $ROOT" ;;
     esac
   done
   [ -t 0 ] || die "ship-site needs a terminal — run it, do not pipe into it"
   have python3 || die "python3 is required (it ships with macOS developer tools)"
-  have npm || { have brew && need "node and npm" npm "brew install node"; } || have npm || die "node is required — install it from https://nodejs.org then run again"
+  have npm || { have brew && need "node and npm" npm "brew install node"; } || have npm || die "node is required for the Vercel and Firebase CLIs — install it from https://nodejs.org then run again"
   [ -n "$ROOT" ] || ROOT="$(find_root)" || ROOT=""
   [ -n "$ROOT" ] && ROOT="$(cd "$ROOT" && pwd)"
 

@@ -449,6 +449,29 @@ g@x${US}shop-1/shop-admin${US}shop-admin${US}shop-admin.web.app${US}${US}firebas
   check "name: back gives nothing"                 is "$(confirm_name "Site" "" "NAME.web.app" <<<$'first\n\e')" ""
   check "name: blank backs out"                    not confirm_name "Site" "" "NAME.web.app" <<<$'\n'
 
+  # static sites: no build, the folder holding index.html goes up as it is
+  st="$(mktemp -d)"; mkdir -p "$st/site/.well-known" "$st/site/privacy" "$st/.git" "$st/node_modules/x" "$st/scripts"
+  : > "$st/site/index.html"; : > "$st/site/.well-known/apple-app-site-association"; : > "$st/site/privacy/index.html"; : > "$st/site/og-image.png"
+  : > "$st/site/.DS_Store"; : > "$st/.git/HEAD"; : > "$st/node_modules/x/i.js"; : > "$st/scripts/deploy.mjs"
+  printf '{"name":"w","version":"1.0.0","scripts":{"dev":"serve site"}}' > "$st/package.json"
+  check "static: a project without a build script"   not has_build "$st"
+  check "static: the web root is site/"              is "$(web_root "$st")" site
+  check "static: a folder with index.html is a project" is_project "$st"
+  check "static: outdir falls back to the web root"  is "$(outdir "$st")" site
+  check "static: files counted without .git and modules" is "$(nfiles "$st/site")" "4 files"
+  sd="$(mktemp -d)"; STATIC=site stage_firebase "$st" "$sd" shop-1
+  check "static firebase: .well-known comes along"   test -f "$sd/public/.well-known/apple-app-site-association"
+  check "static firebase: cleanUrls, no SPA rewrite" bash -c 'grep -q cleanUrls "$1" && ! grep -q rewrites "$1" && ! grep -q "\*\*/\.\*" "$1"' _ "$sd/firebase.json"
+  check "static firebase: .DS_Store dropped"         test ! -e "$sd/public/.DS_Store"
+  sr="$(mktemp -d)"; : > "$sr/index.html"; mkdir -p "$sr/.git"; : > "$sr/.git/HEAD"
+  check "static: index.html at the root, no package.json" is "$(outdir "$sr")" .
+  check "static: find_root from inside it"           is "$(cd "$sr" && find_root)" "$sr"
+  sd2="$(mktemp -d)"; STATIC=. stage_dist "$sr" "$sd2" prj_9 org w
+  check "static vercel: the repo is not uploaded"    test ! -e "$sd2/.git"
+  check "static vercel: cleanUrls instead of the rewrite" bash -c 'grep -q cleanUrls "$1" && ! grep -q rewrites "$1"' _ "$sd2/vercel.json"
+  sd3="$(mktemp -d)"; mkdir -p "$p/dist"; : > "$p/dist/index.html"; rm -f "$p/vercel.json"; STATIC="" stage_dist "$p" "$sd3" prj_9 org w
+  check "app vercel: the SPA rewrite stays for a build" grep -q rewrites "$sd3/vercel.json"
+
   # build output folder and Firebase staging
   check "outdir: dist first"                      is "$(outdir "$p")" dist
   rm -rf "$p/dist"; mkdir -p "$p/build"; : > "$p/build/index.html"
@@ -521,6 +544,13 @@ FAKE
   check "new site here: cached under the project"            grep -q "shop-1/admin-shop-1" <<<"$(vc landing)"
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase < <(printf "s\n\nmyp"); echo "done=$DONE_ID"' _ "$p3" 2>&1 || true)"
   check "new site here: the done screen gets the new site"   grep -q "done=shop-1/admin-shop-1" <<<"$out"
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=yes; PROD=""; printf "ty" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$st" 2>&1 || true)"
+  check "static dry run: says files go up as they are" grep -q "static site: site/ with 4 files" <<<"$out"
+  check "static dry run: no build command"           not grep -q "npm run build" <<<"$out"
+  check "static dry run: passes"                     grep -q "dry run passed" <<<"$out"
+  rm -rf "$st/site"
+  out="$(bash -c 'source ./ship-site/ship-site; DRY=yes; PROD=""; printf "ty" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$st" 2>&1 || true)"
+  check "static: nothing to publish is explained"    grep -q "no build script in package.json, and no index.html" <<<"$out"
   check "new site here: not offered on Vercel"               not grep -q "new site here" <<<"$(bash -c 'source ./ship-site/ship-site; DRY=yes; PROD=""; printf "\e" | deploy me prj_9 shop "$1" vercel' _ "$p" 2>&1)"
   vc proj_set "$p2" id ""
   check "done: back to projects returns"                     bash -c 'source ./ship-site/ship-site; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp'
