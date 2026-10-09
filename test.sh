@@ -222,7 +222,7 @@ FAKE
   # a whole dry ship: pick fresh build, skip mail, then quit from the done menu
   cfg proj_set e2e path "$p"; cfg proj_set e2e app E2E; cfg proj_set e2e app_id A2; cfg proj_set e2e user_id U; cfg proj_set e2e key K
   printf '#!/bin/sh\nmkdir -p build/app/outputs/flutter-apk && printf apk > build/app/outputs/flutter-apk/app-release.apk\n' > "$fb/flutter"
-  out="$(printf 's' | PATH="$fb:$PATH" DRY=yes bash -c 'source ./ship-apk/ship-apk; DRY=yes; trap '"'"'echo "[flow exit=$? at line $LINENO: $BASH_COMMAND]" >&2'"'"' EXIT; printf "sfxq" | ship e2e "$1"; echo "[ship rc=$?]" >&2' _ "$p" 2>&1 || true)"
+  out="$(printf 's' | PATH="$fb:$PATH" DRY=yes bash -c 'source ./ship-apk/ship-apk; DRY=yes; printf "sfxq" | ship e2e "$1"' _ "$p" 2>&1 || true)"
   check "ship dry run: version shown"         grep -q "Version  2.0.0+7" <<<"$out"
   check "ship dry run: checks ran"            grep -q "appho.st app id is set" <<<"$out"
   check "ship dry run: build command shown"   grep -q "build apk --release" <<<"$out"
