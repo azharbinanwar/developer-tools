@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ship-site: build a Vite site, publish only the dist folder to Vercel, copy the link.
+# ship-site: build a web app, publish only its build folder to Vercel or Firebase Hosting, copy the link.
 #
 # One file. Accounts are named and signed in either with a token or through
 # the Vercel browser login; each keeps its own CLI session under
@@ -8,7 +8,11 @@
 # dist/ outside your git repo, so no commit info is attached, and the copy is
 # removed afterwards.
 #
-# Needs node, python3 and the Vercel CLI; it asks before installing node or the CLI.
+# Firebase accounts are the Firebase CLI's own Google logins (firebase login:add);
+# every command names its --account, so several accounts never mix.
+#
+# Needs node and python3, plus the Vercel or Firebase CLI for whichever host a
+# project uses; it asks before installing any of them.
 #
 # License: MIT.
 
@@ -19,7 +23,41 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.1.0"
+VERSION="2.0.0-beta.1"
+# ── platform ──────────────────────────────────────────────────────────────
+# macOS, Linux and Windows (Git Bash or WSL) differ in a few commands; everything platform-specific goes through these.
+case "$(uname -s 2>/dev/null)" in Darwin) OS=mac ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS=linux ;; esac
+PY=python3; command -v python3 >/dev/null 2>&1 || PY=python
+py(){ "$PY" "$@"; }
+clip(){ # stdin -> the clipboard, whichever tool this machine has; false when there is none
+  if command -v pbcopy >/dev/null 2>&1; then pbcopy
+  elif command -v wl-copy >/dev/null 2>&1; then wl-copy
+  elif command -v xclip >/dev/null 2>&1; then xclip -selection clipboard
+  elif command -v xsel >/dev/null 2>&1; then xsel --clipboard --input
+  elif command -v clip.exe >/dev/null 2>&1; then clip.exe
+  else cat >/dev/null; return 1; fi
+}
+open_it(){ # $1 file, folder or url -> opens it with the desktop; false when nothing can
+  if [ "$OS" = mac ]; then open "$1"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1
+  elif command -v wslview >/dev/null 2>&1; then wslview "$1"
+  elif command -v cmd.exe >/dev/null 2>&1; then cmd.exe /c start "" "$1" >/dev/null 2>&1
+  else return 1; fi
+}
+edit_file(){ # $1 file -> opens it in $VISUAL/$EDITOR, else the desktop's text editor; waits only for a terminal editor
+  if [ -n "${VISUAL:-${EDITOR:-}}" ]; then
+    if [ -t 2 ]; then ${VISUAL:-$EDITOR} "$1" </dev/tty >/dev/tty; else ${VISUAL:-$EDITOR} "$1" >&2; fi; return 0
+  fi
+  if [ "$OS" = mac ]; then open -t "$1"; else open_it "$1"; fi || return 1
+  printf "     ${A}Opened in your editor — save it, then press Enter here${R} ${A}›${R} " >&2; read -r _
+}
+fsize(){ stat -f %z "$1" 2>/dev/null || stat -c %s "$1"; }          # bytes
+fmtime(){ stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }         # seconds since the epoch
+fmode(){ stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }         # permission bits, e.g. 600
+fdate(){ date -r "$1" "$2" 2>/dev/null || date -d "@$1" "$2"; }     # $1 epoch seconds  $2 format
+sed_i(){ if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi; }
+tmpf(){ mktemp "${TMPDIR:-/tmp}/${1:-tmp}.XXXXXX"; }              # a temp file; portable, no -t
+tmpd(){ mktemp -d "${TMPDIR:-/tmp}/${1:-tmp}.XXXXXX"; }           # a temp folder
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
 sub(){ printf "     ${D}%s${R}\n" "$1" >&2; }
@@ -43,7 +81,7 @@ ACCTS="$CONF/accounts"
 # ── config + vercel api ───────────────────────────────────────────────────
 # One python block owns config.json and talks to api.vercel.com; bash only asks it for lines.
 vc(){
-python3 - "$CONFIG" "$@" <<'PY'
+py - "$CONFIG" "$@" <<'PY'
 import json, os, sys, urllib.request, urllib.error, urllib.parse
 
 path, op = sys.argv[1], sys.argv[2]
@@ -93,7 +131,8 @@ elif op == "proj_set":  d["projects"].setdefault(a[0], {})[a[1]] = a[2]; save()
 elif op == "user":      u = api(a[0], "-", "GET", "/v2/user")["user"]; print("%s\t%s" % (u["id"], u.get("username") or u.get("name", "")))
 elif op == "teams":     [print("%s\t%s\t%s" % (t["id"], t["slug"], t.get("name", t["slug"]))) for t in pages(a[0], "-", "/v2/teams?limit=100", "teams")]
 elif op == "refresh":   # every account's projects into the cache; a failing account keeps its last known rows
-    base, old, new = os.path.join(os.path.dirname(path), "accounts"), d.get("cache", []), []
+    base, old = os.path.join(os.path.dirname(path), "accounts"), d.get("cache", [])
+    new = [c for c in old if c.get("host") == "firebase"]
     for n in sorted(d["accounts"]):
         try:
             tf, af, tok = os.path.join(base, n, "token"), os.path.join(base, n, "auth.json"), ""
@@ -103,17 +142,63 @@ elif op == "refresh":   # every account's projects into the cache; a failing acc
             for p in pages(tok, d["accounts"][n].get("team_id") or "-", "/v9/projects?limit=100", "projects"):
                 al = p.get("targets", {}).get("production", {}).get("alias") or []
                 url = next((x for x in al if not x.endswith(".vercel.app")), None) or (al[0] if al else p["name"] + ".vercel.app")
-                new.append({"account": n, "id": p["id"], "name": p["name"], "url": url})
+                new.append({"host": "vercel", "account": n, "id": p["id"], "name": p["name"], "url": url})
         except Exception as e:
             sys.stderr.write("%s\t%s\n" % (n, e))
-            new += [c for c in old if c.get("account") == n]
+            new += [c for c in old if c.get("account") == n and c.get("host") != "firebase"]
     d["cache"] = sorted(new, key=lambda c: (c["name"], c["account"])); save()
-elif op == "cache_add": d.setdefault("cache", []).append({"account": a[0], "id": a[1], "name": a[2], "url": a[3]}); save()
-elif op == "landing":   # cached projects with the folder each one was last built from
-    folders = {}
+elif op == "fb_refresh":  # every Firebase CLI login's projects with a hosting site; one CLI call per account
+    import re, subprocess
+    def fb(*args): return subprocess.run(["firebase", *args], capture_output=True, text=True, timeout=180)
+    try: logins = fb("login:list").stdout
+    except Exception: logins = ""   # no Firebase CLI on this Mac: no Firebase rows
+    emails = sorted(set(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+", logins)))
+    old = d.get("cache", [])
+    new = [c for c in old if c.get("host") != "firebase"]
+    for e in emails:
+        try:
+            r = fb("projects:list", "--json", "--account", e)
+            res = json.loads(r.stdout or "{}")
+            if res.get("status") != "success":
+                raise ApiErr(res.get("error") or ((r.stderr or "").strip().splitlines() or ["could not list projects"])[-1])
+            for pr in res.get("result", []):
+                site = (pr.get("resources") or {}).get("hostingSite")
+                if site:
+                    new.append({"host": "firebase", "account": e, "id": pr["projectId"] + "/" + site, "name": site,
+                                "url": site + ".web.app", "project": pr.get("displayName") or pr["projectId"]})
+            new += [c for c in old if c.get("host") == "firebase" and c.get("account") == e and c.get("extra")]
+        except Exception as x:
+            sys.stderr.write("%s\t%s\n" % (e, x))
+            new += [c for c in old if c.get("host") == "firebase" and c.get("account") == e]
+    d["fb_accounts"] = emails
+    d["cache"] = sorted(new, key=lambda c: (c["name"], c["account"])); save()
+elif op == "cache_add":  # account id name url [host] [project name]
+    row = {"host": a[4] if len(a) > 4 else "vercel", "account": a[0], "id": a[1], "name": a[2], "url": a[3]}
+    if len(a) > 5: row.update(project=a[5], extra=True)
+    d.setdefault("cache", []).append(row); save()
+elif op == "landing":   # cached projects: account id name url folder host label, \x1f-separated (empty fields survive)
+    folders, labels = {}, d.get("labels", {})
     for f, pr in d["projects"].items(): folders.setdefault(pr.get("id"), f)
+    # projects already built from a folder on this Mac come first, then the rest by name
+    for c in sorted(d.get("cache", []), key=lambda c: (c["id"] not in folders, c["name"])):
+        h = c.get("host", "vercel")
+        if (h == "vercel" and c["account"] in d["accounts"]) or (h == "firebase" and c["account"] in d.get("fb_accounts", [])):
+            print("\x1f".join([c["account"], c["id"], c["name"], c["url"], folders.get(c["id"], ""), h, labels.get(c["id"], "")]))
+elif op == "label_set":
+    labels = d.setdefault("labels", {})
+    if a[1]: labels[a[0]] = a[1]
+    else: labels.pop(a[0], None)
+    save()
+elif op == "label_get": print(d.get("labels", {}).get(a[0], ""))
+elif op == "fb_accounts": [print(e) for e in d.get("fb_accounts", [])]
+elif op == "stamp":     import time; d["refreshed_at"] = int(time.time()); save()
+elif op == "age":       import time; print(int(time.time()) - int(d.get("refreshed_at") or 0))
+elif op == "fb_projects":  # account -> projectId<TAB>display name, from the cache
+    seen = set()
     for c in d.get("cache", []):
-        if c["account"] in d["accounts"]: print("\t".join([c["account"], c["id"], c["name"], c["url"], folders.get(c["id"], "")]))
+        if c.get("host") == "firebase" and c["account"] == a[0]:
+            pid = c["id"].split("/")[0]
+            if pid not in seen: seen.add(pid); print(pid + "\t" + c.get("project", pid))
 elif op == "create":    p = api(a[0], a[1], "POST", "/v10/projects", {"name": a[2], "framework": None}); print("%s\t%s" % (p["id"], p["name"]))
 elif op == "domain":    # the stable production domain of a project, if any
     ds = [x["name"] for x in pages(a[0], a[1], "/v9/projects/%s/domains?limit=100" % a[2], "domains") if not x.get("gitBranch") and not x.get("redirect")]
@@ -123,38 +208,170 @@ PY
 }
 
 # ── menus and prompts ─────────────────────────────────────────────────────
+# ── shortcut keys ─────────────────────────────────────────────────────────
+# Every option is matched by its text to an action with a default key (ACTIONS below). A key set in
+# ~/.config/developer-tools/keys.json, e.g. {"site.main": "w"}, wins over the default. Options without
+# an action, such as apps and projects, get 1–9 in screen order. Esc picks "← back"; q quits.
+KEYS_FILE="$HOME/.config/developer-tools/keys.json"
+PICK_FILE="$HOME/.config/developer-tools/.lastpick"   # how the last menu pick was made: key or enter; one file, overwritten
+act_of(){ # $1 option text -> "action key" from ACTIONS, or nothing
+  local t p a k
+  t="$(printf '%s' "$1" | sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b(B//g' | tr 'A-Z' 'a-z' \
+       | sed -e 's/^[[:space:]]*//' -e 's/^← *//' -e 's/^+ *//' -e 's/[[:space:]]*$//')"
+  while IFS='|' read -r p a k; do
+    [ -n "$p" ] || continue
+    case "$t" in "$p"|"$p "*) printf '%s %s' "$a" "$k"; return ;; esac
+  done <<<"$ACTIONS"
+}
+MK=(); MENU_NOKEY=""   # MENU_NOKEY: indexes of rows that are data (apps, projects, people) — they get 1–9, never an action key
+nokey_rows(){ # $1 count -> "0 1 … count-1", or nothing for 0 (seq would count down to -1)
+  local i out=""; for ((i=0;i<${1:-0};i++)); do out="$out$i "; done; printf '%s' "${out% }"
+}
+menu_keys(){ # -> MK: the shortcut shown for each MENU_ITEMS entry (a letter, 1–9, esc, or nothing)
+  local i ak a k o ov used=" j k q / ? " d=1 acts=() defs=() all=" " nokey=" $MENU_NOKEY "
+  MK=(); ov=""; MENU_NOKEY=""
+  [ -f "$KEYS_FILE" ] && ov="$(py -c '
+import json, sys
+for a, k in json.load(open(sys.argv[1])).items(): print(a + "=" + str(k)[:1].lower())' "$KEYS_FILE" 2>/dev/null)"
+  # first pass: every option's action and default key, so a key from keys.json can never steal another option's default
+  for ((i=0;i<${#MENU_ITEMS[@]};i++)); do
+    a=""; k=""
+    case "$nokey" in *" $i "*) ak="" ;; *) [ "${MENU_ITEMS[$i]:0:1}" != $'\x01' ] && ak="$(act_of "${MENU_ITEMS[$i]}")" || ak="" ;; esac
+    [ -n "$ak" ] && { a="${ak%% *}"; k="${ak#* }"; }
+    acts+=("$a"); defs+=("$k"); [ -n "$k" ] && [ "$k" != esc ] && all="$all$k "
+  done
+  for ((i=0;i<${#MENU_ITEMS[@]};i++)); do
+    a="${acts[$i]}"; k="${defs[$i]}"
+    if [ -n "$a" ] && [ "$a" != "-" ] && [ "$k" != esc ]; then
+      o="$(printf '%s\n' "$ov" | grep -F "$a=" | head -1 | cut -d= -f2 || true)"
+      if [ -n "$o" ] && [ "$o" != "$k" ]; then
+        case "$used$all" in *" $o "*) warn "keys.json: “${o}” for ${a} is taken on this screen — keeping “${k}”"; o="" ;; esac
+      fi
+      [ -n "$o" ] && k="$o"
+      case "$used" in *" $k "*) k="" ;; esac
+    fi
+    [ "$a" = "-" ] && k=""
+    [ "$a" = quit ] && k=q          # q quits on every screen anyway; the quit option just shows it
+    if [ -z "$a" ] && [ "${MENU_ITEMS[$i]:0:1}" != $'\x01' ] && [ "$d" -le 9 ]; then k="$d"; d=$((d + 1)); fi
+    [ -n "$k" ] && [ "$k" != esc ] && used="$used$k "
+    MK+=("$k")
+  done
+  mkdir -p "${PICK_FILE%/*}" 2>/dev/null; printf 'enter' > "$PICK_FILE" 2>/dev/null
+}
+pfx(){ local k="${MK[$1]:-}"; [ -n "$k" ] && printf '%-6s' "[$k]" || printf '      '; }
+key_hit(){ # $1 key pressed -> echoes the index of the option with that shortcut
+  local i; [ -n "$1" ] || return 1
+  for ((i=0;i<${#MK[@]};i++)); do [ "${MK[$i]}" = "$1" ] && { printf 'key' > "$PICK_FILE" 2>/dev/null; printf '%s' "$i"; return 0; }; done
+  return 1
+}
+back_hit(){ local i; for ((i=0;i<${#MK[@]};i++)); do [ "${MK[$i]}" = esc ] && { printf '%s' "$i"; return 0; }; done; return 1; }
+picked_by_key(){ [ "$(cat "$PICK_FILE" 2>/dev/null)" = key ]; }
+confirm_y(){ # $1 question -> true only on y; used where one stray key must not do something hard to undo
+  local c; printf "     ${Y}%s${R} ${A}y to go, any other key cancels ›${R} " "$1" >&2
+  IFS= read -rsn1 c; printf '%s\n' "$c" >&2
+  [ "$c" = y ] || [ "$c" = Y ]
+}
+ACTIONS=""
+IFS= read -r -d '' ACTIONS <<'ACTS' || true   # a heredoc, so option texts may hold quotes
+new project here|-|
+new project|project.new|n
+label a project|project.label|l
+accounts|accounts|a
+refresh|refresh|r
+quit|quit|q
+main website|site.main|m
+test version|site.test|t
+publish as|version.keep|p
+bump|version.bump|b
+vercel project|new.vercel|v
+firebase site|new.firebase|f
+create a new firebase project|new.firebase_project|c
+add a firebase account|account.add_firebase|f
+add a vercel account|account.add_vercel|v
+sign in with vercel in the browser|signin.browser|b
+paste a token|signin.token|t
+vercel|host.vercel|v
+firebase|host.firebase|f
+this folder|folder.this|t
+the folder it was built from last time|folder.last|l
+remove it|account.remove|d
+sign it out|account.signout|d
+personal|scope.personal|p
+back|back|esc
+ACTS
 fit(){ # $1 text (may carry colour codes)  $2 width -> the text as is, or cut with … when it would wrap
   local plain
   plain="$(printf '%s' "$1" | sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b(B//g')"
   [ "${#plain}" -le "$2" ] && { printf '%s' "$1"; return; }
   printf '%s…' "${plain:0:$(( $2 - 1 ))}"
 }
-MENU_ITEMS=(); MENU_NOTES=()
+term_size(){ # -> "rows cols" of the real terminal; works inside $( ), where tput only sees a pipe and guesses 24x80
+  local s; s="$({ stty size </dev/tty; } 2>/dev/null)"
+  [ -n "$s" ] && { printf '%s' "$s"; return; }
+  printf '%s %s' "$(tput lines 2>/dev/null || echo 24)" "$(tput cols 2>/dev/null || echo 80)"
+}
+MENU_ITEMS=(); MENU_NOTES=(); MENU_FIXED=0
 menu_pick(){ # $1 title  $2 start index -> echoes chosen index
-  local title="$1" n=${#MENU_ITEMS[@]} sel="$2" k rest i saved
+  # items starting with \x01 are headings, never picked; the last MENU_FIXED items stay on screen while the rest scrolls
+  local title="$1" n=${#MENU_ITEMS[@]} sel="$2" k rest i saved step nf ns vs top=0 last L ctxl=0 lines cols w g ctx more
+  nf=${MENU_FIXED:-0}; MENU_FIXED=0; ns=$((n - nf))
+  read -r lines cols <<<"$(term_size)"
+  vs=$(( lines - 9 - nf )); [ "$vs" -lt 3 ] && vs=3; [ "$vs" -gt "$ns" ] && vs=$ns
+  [ "$ns" -gt "$vs" ] && ctxl=1      # a scrolling list gets one line on top for its group heading
+  L=$((ctxl + vs + nf))
   saved="$(stty -g 2>/dev/null || true)"
   printf '\033[?7l' >&2   # no wrapping while the menu is up: a long row is cut, not wrapped, so the redraw stays aligned
   [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null; trap 'stty "$saved" 2>/dev/null; printf "\033[?7h" >&2; exit 130' INT; }
-  printf "     ${D}%s  · ↑↓ move · Enter picks · q quits${R}\n" "$title" >&2
-  for ((i=0;i<n;i++)); do printf '\n' >&2; done
+  menu_keys
+  printf "     ${D}%s  · ↑↓ move · Enter or a [key] picks · Esc back · q quits${R}\n" "$title" >&2
+  for ((i=0;i<L;i++)); do printf '\n' >&2; done
   # rows are cut to the window width up front: a wrapped row would throw off the cursor-up redraw
-  local w rows=(); w=$(( $(tput cols 2>/dev/null || echo 80) - 8 ))
-  for ((i=0;i<n;i++)); do rows+=("$(fit "${MENU_ITEMS[$i]}${MENU_NOTES[$i]:-}" "$w")"); done
+  local rows=() hit; w=$(( cols - 20 ))
+  for ((i=0;i<n;i++)); do
+    if [ "${MENU_ITEMS[$i]:0:1}" = $'\x01' ]; then rows+=("$(fit "${MENU_ITEMS[$i]}" "$w")")
+    else rows+=("$(fit "$(pfx "$i")${MENU_ITEMS[$i]}${MENU_NOTES[$i]:-}" "$w")"); fi
+  done
+  is_head(){ [ "${MENU_ITEMS[$1]:0:1}" = $'\x01' ]; }
+  while is_head "$sel"; do sel=$(((sel+1)%n)); done
   while :; do
-    printf "\033[%dA" "$n" >&2
-    for ((i=0;i<n;i++)); do
-      if [ "$i" -eq "$sel" ]; then printf "\r\033[K     ${A}❯ %s${R}\n" "${rows[$i]}" >&2
-      else                         printf "\r\033[K       ${D}%s${R}\n" "${rows[$i]}" >&2; fi
+    if [ "$sel" -lt "$ns" ]; then
+      [ "$sel" -lt "$top" ] && top=$sel
+      [ "$sel" -ge $((top + vs)) ] && top=$((sel - vs + 1))
+      [ "$top" -gt 0 ] && is_head $((top - 1)) && [ "$sel" -lt $((top + vs - 1)) ] && top=$((top - 1))
+    fi
+    last=$((top + vs - 1))
+    printf "\033[%dA" "$L" >&2
+    if [ "$ctxl" = 1 ]; then
+      # the heading of the group in view, pinned when it has scrolled off the top
+      ctx=""; g=$([ "$sel" -lt "$ns" ] && echo "$sel" || echo "$top")
+      while [ "$g" -ge 0 ] && ! is_head "$g"; do g=$((g - 1)); done
+      [ "$g" -ge 0 ] && [ "$g" -lt "$top" ] && ctx="${rows[$g]:1}"
+      printf "\r\033[K     ${B}%s${R}%s\n" "$ctx" "$([ "$top" -gt 0 ] && printf "  ${D}▲ %s more${R}" "$top")" >&2
+    fi
+    for ((i=top;i<=last && i<ns;i++)); do
+      more=""; [ "$i" -eq "$last" ] && [ "$last" -lt $((ns - 1)) ] && more="  ${D}▼ $((ns - 1 - last)) more${R}"
+      if   is_head "$i";           then printf "\r\033[K     ${B}%s${R}%s\n" "${rows[$i]:1}" "$more" >&2
+      elif [ "$i" -eq "$sel" ];    then printf "\r\033[K     ${A}❯ %s${R}%s\n" "${rows[$i]}" "$more" >&2
+      else                              printf "\r\033[K       ${D}%s${R}%s\n" "${rows[$i]}" "$more" >&2; fi
     done
-    IFS= read -rsn1 k 2>/dev/null || break
+    for ((i=ns;i<n;i++)); do
+      if   is_head "$i";           then printf "\r\033[K     ${B}%s${R}\n" "${rows[$i]:1}" >&2
+      elif [ "$i" -eq "$sel" ];    then printf "\r\033[K     ${A}❯ %s${R}\n" "${rows[$i]}" >&2
+      else                              printf "\r\033[K       ${D}%s${R}\n" "${rows[$i]}" >&2; fi
+    done
+    IFS= read -rsn1 k 2>/dev/null || { hit="$(back_hit)" && sel=$hit; break; }   # end of input: back out when there is a back
+    step=0
+    hit="$(key_hit "$k")" && { sel=$hit; break; }
     case "$k" in
       '')    break ;;
-      $'\e') IFS= read -rsn2 rest 2>/dev/null || rest=""
-             case "$rest" in "[A") sel=$(((sel-1+n)%n)) ;; "[B") sel=$(((sel+1)%n)) ;; esac ;;
-      k|K)   sel=$(((sel-1+n)%n)) ;;
-      j|J)   sel=$(((sel+1)%n)) ;;
+      $'\e') IFS= read -rsn2 -t 1 rest 2>/dev/null || rest=""
+             [ -z "$rest" ] && { hit="$(back_hit)" && { sel=$hit; break; }; }
+             case "$rest" in "[A") step=-1 ;; "[B") step=1 ;; esac ;;
+      k|K)   step=-1 ;;
+      j|J)   step=1 ;;
       q|Q)   [ -n "$saved" ] && stty "$saved" 2>/dev/null; printf '\033[?7h\n' >&2; exit 0 ;;
     esac
+    [ "$step" -ne 0 ] && { sel=$(((sel+step+n)%n)); while is_head "$sel"; do sel=$(((sel+step+n)%n)); done; }
   done
   printf '\033[?7h' >&2
   [ -n "$saved" ] && { trap - INT; stty "$saved" 2>/dev/null; }
@@ -175,13 +392,23 @@ ask_secret(){ # $1 label  $2 saved value -> one * per character typed; Enter on 
   printf '%s' "${r:-${2:-}}"
 }
 
+need(){ # $1 what  $2 how to check  $3 install command -> asks, installs, or dies with the command
+  have "$2" && return
+  printf "     ${Y}!${R} %s is not installed\n     ${A}Install it now with  %s${R} ${D}(y/n) [yes]${R} ${A}›${R} " "$1" "$3" >&2
+  read -r a; case "$a" in [nN]*) die "install it yourself, then run again:  $3" ;; esac
+  $3 >&2 || die "that failed — run it yourself and try again:  $3"
+  have "$2" || die "$1 still not found — open a new terminal and run again"
+}
+need_vercel(){ need "the Vercel CLI" vercel "npm i -g vercel"; }
+need_firebase(){ need "the Firebase CLI" firebase "npm i -g firebase-tools"; }
+
 # ── accounts ──────────────────────────────────────────────────────────────
 # Every account ends up with a token on disk: pasted ones in accounts/<name>/token,
 # browser logins in the CLI's own accounts/<name>/auth.json. Same API path after that.
 acct_token(){ # $1 name -> echoes the token
   local dir="$ACCTS/$1"
   [ -f "$dir/token" ] && { cat "$dir/token"; return; }
-  [ -f "$dir/auth.json" ] && python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("token",""))' "$dir/auth.json"
+  [ -f "$dir/auth.json" ] && py -c 'import json,sys;print(json.load(open(sys.argv[1])).get("token",""))' "$dir/auth.json"
 }
 AUTH=()
 acct_cli(){ # $1 name -> fills AUTH with the vercel cli flags, as an array so a space in the name survives
@@ -196,19 +423,21 @@ add_account(){ # -> echoes the new account name
   case "$name" in */*|.*) warn "no slashes or leading dots"; return 1 ;; esac
   [ -z "$(vc acct_get "$name" org_id)" ] || { warn "“${name}” exists already — pick it from the list"; return 1; }
   dir="$ACCTS/$name"; mkdir -p "$dir"; chmod 700 "$ACCTS" "$dir"
-  MENU_ITEMS=("sign in with Vercel in the browser" "paste a token")
-  MENU_NOTES=("  ${D}opens vercel.com, nothing to copy${R}" "  ${D}from vercel.com/account/tokens${R}")
-  if [ "$(menu_pick "How" 0)" = 0 ]; then
+  MENU_ITEMS=("sign in with Vercel in the browser" "paste a token" "← back")
+  MENU_NOTES=("  ${D}opens vercel.com, nothing to copy${R}" "  ${D}from vercel.com/account/tokens${R}" "")
+  idx="$(menu_pick "How" 0)"
+  [ "$idx" = 2 ] && { rm -rf "$dir"; return 1; }
+  if [ "$idx" = 0 ]; then
     cmd "vercel login --global-config $dir"
-    vercel login --global-config "$dir" >&2 || { rm -rf "$dir"; die "sign-in did not finish"; }
+    vercel login --global-config "$dir" >&2 || { rm -rf "$dir"; warn "sign-in did not finish"; return 1; }
     rm -f "$dir/token"
   else
     sub "create one at https://vercel.com/account/tokens, then paste it here (hidden)"
     token="$(ask_secret "Token")"; [ -n "$token" ] || { rm -rf "$dir"; return 1; }
     printf '%s\n' "$token" > "$dir/token"; chmod 600 "$dir/token"
   fi
-  token="$(acct_token "$name")"; [ -n "$token" ] || { rm -rf "$dir"; die "no token came back"; }
-  user="$(vc user "$token")" || { rm -rf "$dir"; die "${user#ERR	}"; }
+  token="$(acct_token "$name")"; [ -n "$token" ] || { rm -rf "$dir"; warn "no token came back"; return 1; }
+  user="$(vc user "$token")" || { rm -rf "$dir"; warn "${user#ERR	}"; return 1; }
   ok "signed in as ${user#*	}"
 
   # scope: personal, or one of the teams the account belongs to
@@ -233,28 +462,67 @@ pick_account(){ # -> echoes an account name
   while :; do
     names=(); MENU_ITEMS=(); MENU_NOTES=()
     while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); MENU_ITEMS+=("$(printf '%-16s' "$n")"); MENU_NOTES+=("  ${D}$(vc acct_get "$n" scope)${R}"); }; done < <(vc accounts)
-    MENU_ITEMS+=("+ add an account"); MENU_NOTES+=("  ${D}browser sign-in or a token${R}")
+    MENU_ITEMS+=("+ add a Vercel account" "← back"); MENU_NOTES+=("  ${D}browser sign-in or a token${R}" "")
     step "Vercel account"
     idx="$(menu_pick "Which account" 0)"
-    if [ "$idx" -eq ${#names[@]} ]; then n="$(add_account)" && { printf '%s' "$n"; return; }
+    if   [ "$idx" -eq $(( ${#names[@]} + 1 )) ]; then return 1
+    elif [ "$idx" -eq ${#names[@]} ]; then n="$(add_account)" && { printf '%s' "$n"; return; }
     else printf '%s' "${names[$idx]}"; return; fi
   done
 }
 
-accounts_menu(){
-  local names=() n idx
+fb_logins(){ # -> the Google accounts signed in to the Firebase CLI right now, one per line
+  have firebase && firebase login:list 2>/dev/null | grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+' | sort -u
+}
+
+add_fb_account(){ # signs one more Google account into the Firebase CLI; the CLI keeps them side by side
+  need_firebase
+  step "Add a Firebase account"
+  sub "signs in with Google in the browser — nothing to copy"
+  if firebase login:list 2>/dev/null | grep -Eq '[A-Za-z0-9._%+-]+@'; then
+    cmd "firebase login:add"; firebase login:add >&2 || { warn "sign-in did not finish"; return 1; }
+  else
+    cmd "firebase login"; firebase login >&2 || { warn "sign-in did not finish"; return 1; }
+  fi
+  ok "signed in"
+}
+
+add_any_account(){ # -> asks which host and adds an account there; asks again until one is added or the user quits
   while :; do
-    names=(); MENU_ITEMS=(); MENU_NOTES=()
-    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); MENU_ITEMS+=("$(printf '%-16s' "$n")"); MENU_NOTES+=("  ${D}$(vc acct_get "$n" scope)  · $([ -f "$ACCTS/$n/token" ] && echo token || echo 'browser sign-in')${R}"); }; done < <(vc accounts)
-    MENU_ITEMS+=("+ add an account" "← back"); MENU_NOTES+=("" "")
+    MENU_ITEMS=("Vercel" "Firebase" "quit"); MENU_NOTES=("  ${D}browser sign-in or a token${R}" "  ${D}Google sign-in in the browser${R}" "")
+    step "Add an account"
+    case "$(menu_pick "Where" 0)" in
+      0) need_vercel; add_account >/dev/null && return 0 ;;
+      1) add_fb_account && return 0 ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+accounts_menu(){
+  local names=() kinds=() n idx
+  while :; do
+    names=(); kinds=(); MENU_ITEMS=(); MENU_NOTES=()
+    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); kinds+=(vercel); MENU_ITEMS+=("$(printf '%-28s' "$n")"); MENU_NOTES+=("  ${D}Vercel   · $(vc acct_get "$n" scope) · $([ -f "$ACCTS/$n/token" ] && echo token || echo 'browser sign-in')${R}"); }; done < <(vc accounts)
+    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); kinds+=(firebase); MENU_ITEMS+=("$(printf '%-28s' "$n")"); MENU_NOTES+=("  ${D}Firebase · Google sign-in${R}"); }; done < <(fb_logins)
+    MENU_ITEMS+=("+ add a Vercel account" "+ add a Firebase account" "← back"); MENU_NOTES+=("" "" "")
     step "Accounts"
     idx="$(menu_pick "Which account" 0)"
-    if   [ "$idx" -eq $(( ${#names[@]} + 1 )) ]; then return
-    elif [ "$idx" -eq ${#names[@]} ]; then add_account >/dev/null; continue; fi
+    case $(( idx - ${#names[@]} )) in
+      0) need_vercel; add_account >/dev/null; continue ;;
+      1) add_fb_account; vc fb_refresh 2>/dev/null; continue ;;
+      2) return ;;
+    esac
     n="${names[$idx]}"
-    MENU_ITEMS=("remove it" "← back"); MENU_NOTES=("  ${D}forgets the sign-in on this Mac, nothing changes on Vercel${R}" "")
-    step "$n"
-    [ "$(menu_pick "What to do" 1)" = 0 ] && { vc acct_del "$n"; rm -rf "$ACCTS/$n"; ok "removed “${n}”"; }
+    if [ "${kinds[$idx]}" = firebase ]; then
+      MENU_ITEMS=("sign it out" "← back"); MENU_NOTES=("  ${D}firebase logout ${n} — nothing changes on Firebase${R}" "")
+      step "$n"
+      [ "$(menu_pick "What to do" 1)" = 0 ] && { cmd "firebase logout $n"; firebase logout "$n" >&2; vc fb_refresh 2>/dev/null; ok "signed out “${n}”"; }
+    else
+      MENU_ITEMS=("remove it" "← back"); MENU_NOTES=("  ${D}forgets the sign-in on this Mac, nothing changes on Vercel${R}" "")
+      step "$n"
+      [ "$(menu_pick "What to do" 1)" = 0 ] && { vc acct_del "$n"; rm -rf "$ACCTS/$n"; ok "removed “${n}”"; }
+    fi
   done
 }
 
@@ -263,7 +531,7 @@ wake_logins(){ # browser logins expire; any vercel cli call renews them, so nudg
   local n
   while IFS= read -r n; do
     [ -n "$n" ] && vercel whoami --global-config "$ACCTS/$n" >/dev/null 2>&1
-  done < <(python3 - "$ACCTS" <<'PY2'
+  done < <(py - "$ACCTS" <<'PY2'
 import json, os, sys, time
 for n in sorted(os.listdir(sys.argv[1])) if os.path.isdir(sys.argv[1]) else []:
     f = os.path.join(sys.argv[1], n, "auth.json")
@@ -274,15 +542,16 @@ PY2
 )
 }
 
-refresh(){ # pulls every account's projects into the cache behind a spinner
+refresh(){ # pulls every account's projects into the cache behind a spinner; "fresh" skips it when the cache is under 10 minutes old
   local out pid i=0 f='|/-\' n e
-  out="$(mktemp -t shipsite-refresh)"
-  { wake_logins; vc refresh; } 2>"$out" & pid=$!
+  [ "${1:-}" = fresh ] && [ -n "$(vc landing)" ] && [ "$(vc age)" -lt 600 ] && return 0
+  out="$(tmpf shipsite-refresh)"
+  { wake_logins; vc refresh; vc fb_refresh; } 2>"$out" & pid=$!
   if [ -t 2 ]; then
-    while kill -0 "$pid" 2>/dev/null; do printf "\r     ${A}%s${R} ${D}refreshing projects from Vercel…${R}" "${f:$((i++ % 4)):1}" >&2; sleep 0.15; done
+    while kill -0 "$pid" 2>/dev/null; do printf "\r     ${A}%s${R} ${D}refreshing projects from Vercel and Firebase…${R}" "${f:$((i++ % 4)):1}" >&2; sleep 0.15; done
     printf "\r\033[K" >&2
   fi
-  wait "$pid"
+  wait "$pid"; vc stamp
   while IFS=$'\t' read -r n e; do [ -n "$n" ] && warn "“${n}”: ${e} — showing its last known projects"; done <"$out"
   rm -f "$out"
 }
@@ -304,13 +573,99 @@ choose_folder(){ # $1 folder this project was last built from -> echoes the fold
   done
 }
 
-new_project(){ # -> echoes "account<TAB>id<TAB>name" of a project created by name
-  local names=() n acct token team pname r
+fb_ensure_site(){ # $1 account $2 project id -> echoes the project's hosting site, creating the default one when it has none
+  local acct="$1" pid="$2" site
+  site="$(firebase hosting:sites:list --project "$pid" --account "$acct" --json 2>/dev/null \
+    | py -c 'import json,sys;s=(json.load(sys.stdin).get("result") or {}).get("sites") or [];print(s[0]["name"].rsplit("/",1)[-1] if s else "")' 2>/dev/null)"
+  [ -n "$site" ] && { printf '%s' "$site"; return; }
+  cmd "firebase hosting:sites:create $pid --project $pid --account $acct"
+  firebase hosting:sites:create "$pid" --project "$pid" --account "$acct" --non-interactive >&2 || return 1
+  printf '%s' "$pid"
+}
+
+fb_create_project(){ # $1 account $2 suggested name -> echoes "projectId<TAB>site" of a brand-new Firebase project
+  local acct="$1" name id r site
+  step "New Firebase project in ${acct}"
+  sub "free plan, Hosting only — no billing needed"
+  name="$(ask "Project name" "$2")"; [ -n "$name" ] || return 1
+  while :; do
+    # project ids are global across all of Google Cloud, so a short random tail avoids clashes
+    id="$(ask "Project id (6–30 letters, digits, dashes; unique worldwide)" "$(slugify "$name" | cut -c1-24)-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')")"
+    [ -n "$id" ] || return 1
+    echo "$id" | grep -Eq '^[a-z][a-z0-9-]{4,28}[a-z0-9]$' && break
+    warn "“${id}” is not a valid project id — lowercase letters, digits and dashes, 6–30 long, starting with a letter"
+  done
+  [ "$DRY" = yes ] && { ok "would create Firebase project “${name}” (${id}) with its site ${id}.web.app  ${D}(dry run, not created)${R}"; return 1; }
+  cmd "firebase projects:create $id --display-name \"$name\" --account $acct"
+  if ! r="$(firebase projects:create "$id" --display-name "$name" --account "$acct" --non-interactive 2>&1)"; then
+    printf '%s\n' "$r" | grep -i error | tail -3 | while IFS= read -r l; do sub "$l"; done
+    if printf '%s' "$r" | grep -qi 'terms of service\|tos'; then
+      warn "this Google account has not accepted the Google Cloud terms yet — opening them; accept, then try again"
+      open_it "https://console.cloud.google.com/"
+    fi
+    return 1
+  fi
+  ok "created project “${name}” (${id})"
+  site="$(fb_ensure_site "$acct" "$id")" || { warn "the project was created but its Hosting site was not — open console.firebase.google.com › Hosting › Get started"; return 1; }
+  printf '%s\t%s' "$id" "$site"
+}
+
+new_project(){ # $1 host  $2 account (both optional: given from a group's own row) -> echoes "host<TAB>account<TAB>id<TAB>name"
+  local names=() fbs=() n acct="${2:-}" token team pname r host="${1:-}" idx pid site
   while IFS= read -r n; do [ -n "$n" ] && names+=("$n"); done < <(vc accounts)
-  if [ ${#names[@]} -eq 1 ]; then acct="${names[0]}"; else acct="$(pick_account)" || return 1; fi
+  while IFS= read -r n; do [ -n "$n" ] && fbs+=("$n"); done < <(vc fb_accounts)
+  if [ -z "$host" ]; then
+    MENU_ITEMS=("Vercel project" "Firebase site" "← back")
+    MENU_NOTES=("  ${D}$([ ${#names[@]} -gt 0 ] && echo "in ${names[0]}$([ ${#names[@]} -gt 1 ] && echo ' or another account')" || echo 'signs in to Vercel first')${R}"
+                "  ${D}$([ ${#fbs[@]} -gt 0 ] && echo 'in an existing or a new Firebase project' || echo 'signs in with Google first')${R}" "")
+    step "New project"
+    case "$(menu_pick "Where" 0)" in 0) host=vercel ;; 1) host=firebase ;; *) return 1 ;; esac
+  fi
+  n=""; [ -n "$ROOT" ] && n="$(slugify "$(node -p "require('$ROOT/package.json').name||''" 2>/dev/null || basename "$ROOT")")"
+
+  if [ "$host" = firebase ]; then
+    need_firebase
+    while [ -z "$acct" ]; do
+      MENU_ITEMS=(); MENU_NOTES=()
+      for n2 in "${fbs[@]}"; do MENU_ITEMS+=("$n2"); MENU_NOTES+=(""); done
+      MENU_ITEMS+=("+ add a Firebase account" "← back"); MENU_NOTES+=("  ${D}another Google account, signed in through the browser${R}" "")
+      step "Firebase account"
+      idx="$(menu_pick "Which account" 0)"
+      if   [ "$idx" -eq $(( ${#fbs[@]} + 1 )) ]; then return 1
+      elif [ "$idx" -eq ${#fbs[@]} ]; then
+        add_fb_account && vc fb_refresh 2>/dev/null
+        fbs=(); while IFS= read -r n2; do [ -n "$n2" ] && fbs+=("$n2"); done < <(vc fb_accounts)
+      else acct="${fbs[$idx]}"; fi
+    done
+    local pids=(); MENU_ITEMS=("+ create a new Firebase project"); MENU_NOTES=("  ${D}just a name — free plan, Hosting only${R}")
+    while IFS=$'\t' read -r pid pname; do [ -n "$pid" ] && { pids+=("$pid"); MENU_ITEMS+=("$(printf '%-30s' "$pname")"); MENU_NOTES+=("  ${D}${pid}${R}"); }; done < <(vc fb_projects "$acct")
+    MENU_ITEMS+=("← back"); MENU_NOTES+=("")
+    step "Which Firebase project  ${D}${acct}${R}"
+    idx="$(menu_pick "Project" 0)"
+    [ "$idx" -eq $(( ${#pids[@]} + 1 )) ] && return 1
+    if [ "$idx" -eq 0 ]; then
+      r="$(fb_create_project "$acct" "${n:-my-site}")" || return 1
+      pid="${r%%	*}"; site="${r#*	}"
+      vc cache_add "$acct" "$pid/$site" "$site" "$site.web.app" firebase "$pid"
+      printf 'firebase\t%s\t%s\t%s' "$acct" "$pid/$site" "$site"; return
+    fi
+    pid="${pids[$((idx - 1))]}"
+    while :; do
+      pname="$(slugify "$(ask "Site name (becomes <name>.web.app)" "$n")")"; [ -n "$pname" ] || return 1
+      [ "$DRY" = yes ] && { ok "would create site “${pname}” in ${pid}  ${D}(dry run, not created)${R}"; return 1; }
+      cmd "firebase hosting:sites:create $pname --project $pid --account $acct"
+      r="$(firebase hosting:sites:create "$pname" --project "$pid" --account "$acct" --non-interactive 2>&1)" && break
+      warn "$(printf '%s' "$r" | grep -i error | tail -1 | sed 's/^Error: //')"
+    done
+    ok "created site “${pname}” → ${pname}.web.app"
+    vc cache_add "$acct" "$pid/$pname" "$pname" "$pname.web.app" firebase "$pid"
+    printf 'firebase\t%s\t%s\t%s' "$acct" "$pid/$pname" "$pname"; return
+  fi
+
+  need_vercel
+  if [ -n "$acct" ]; then :; elif [ ${#names[@]} -eq 1 ]; then acct="${names[0]}"; elif [ ${#names[@]} -eq 0 ]; then acct="$(add_account)" || return 1; else acct="$(pick_account)" || return 1; fi
   token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
   step "New Vercel project in “${acct}”  ${D}$(vc acct_get "$acct" scope)${R}"
-  n=""; [ -n "$ROOT" ] && n="$(slugify "$(node -p "require('$ROOT/package.json').name||''" 2>/dev/null || basename "$ROOT")")"
   while :; do
     pname="$(ask "Project name" "$n")"; [ -n "$pname" ] || return 1
     pname="$(slugify "$pname")"
@@ -320,7 +675,51 @@ new_project(){ # -> echoes "account<TAB>id<TAB>name" of a project created by nam
   done
   ok "created “${r#*	}”"
   vc cache_add "$acct" "${r%%	*}" "${r#*	}" "${r#*	}.vercel.app"
-  printf '%s\t%s' "$acct" "$r"
+  printf 'vercel\t%s\t%s' "$acct" "$r"
+}
+
+firebaserc_project(){ # $1 folder -> the default Firebase project its .firebaserc names, if any
+  [ -f "$1/.firebaserc" ] && py -c 'import json,sys;print((json.load(open(sys.argv[1])).get("projects") or {}).get("default",""))' "$1/.firebaserc" 2>/dev/null
+}
+
+firebase_json_site(){ # $1 folder -> the hosting site its firebase.json names, if any
+  [ -f "$1/firebase.json" ] && py -c '
+import json, sys
+h = json.load(open(sys.argv[1])).get("hosting", {})
+h = h[0] if isinstance(h, list) and h else h
+print(h.get("site", "") if isinstance(h, dict) else "")' "$1/firebase.json" 2>/dev/null
+}
+vercel_json_project(){ # $1 folder -> the Vercel project id its .vercel/project.json names, if any
+  [ -f "$1/.vercel/project.json" ] && py -c 'import json,sys;print(json.load(open(sys.argv[1])).get("projectId",""))' "$1/.vercel/project.json" 2>/dev/null
+}
+
+rank_rows(){ # stdin: landing rows; $1 folder $2 .firebaserc project $3 firebase.json site $4 .vercel project $5 names
+  # -> the rows grouped by account and host, each with its rank (0 path, 1 config, 2 name, 9 none) and why
+  py -c '
+import sys
+root, rc, fbsite, vid = sys.argv[1:5]
+names = set(n for n in sys.argv[5].split() if n)
+rows = [(l.rstrip("\n").split("\x1f") + [""] * 7)[:7] for l in sys.stdin if l.strip()]
+def rank(r):
+    a, i, n, u, f, h, lb = r
+    if root and f == root: return 0, "this folder"
+    if f and f != root: return 9, ""
+    if h == "firebase":
+        pid, site = (i.split("/") + [""])[:2]
+        if (rc and pid == rc) or (fbsite and site == fbsite): return 1, "this folder’s firebase config"
+        if pid in names or site in names or n.lower() in names: return 2, "same name as this folder"
+    else:
+        if vid and i == vid: return 1, "this folder’s .vercel link"
+        if n.lower() in names: return 2, "same name as this folder"
+    return 9, ""
+groups = {}
+for r in rows: groups.setdefault((r[5], r[0]), []).append(r)
+best = lambda g: min(rank(r)[0] for r in groups[g])
+for g in sorted(groups, key=lambda g: (best(g), g[0] != "vercel", g[1].lower())):
+    for r in groups[g]:
+        k, why = rank(r)
+        print("\x1f".join(r + [str(k), why]))
+' "$@"
 }
 
 find_root(){ local d="$PWD"; while [ "$d" != "/" ]; do [ -f "$d/package.json" ] && { printf '%s' "$d"; return; }; d="$(dirname "$d")"; done; return 1; }
@@ -331,12 +730,34 @@ detect_pm(){ # $1 root -> the package manager whose lockfile is there, npm other
   else echo npm; fi
 }
 slugify(){ printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//'; }
+outdir(){ # $1 root -> the build output folder with an index.html: dist (Vite), build (Create React App), out (Next.js export), _site (Eleventy, Jekyll)
+  local d; for d in dist build out _site; do [ -f "$1/$d/index.html" ] && { printf '%s' "$d"; return; }; done
+}
 stage_dist(){ # $1 root  $2 stage dir  $3 project id  $4 org id  $5 project name
-  cp -R "$1/dist/." "$2/" || return 1
+  cp -R "$1/$(outdir "$1")/." "$2/" || return 1
   [ -f "$1/vercel.json" ] && cp "$1/vercel.json" "$2/vercel.json"
   [ -f "$2/vercel.json" ] || printf '{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}' > "$2/vercel.json"
   mkdir -p "$2/.vercel"
   printf '{"projectId":"%s","orgId":"%s","projectName":"%s"}' "$3" "$4" "$5" > "$2/.vercel/project.json"
+}
+
+stage_firebase(){ # $1 root  $2 stage dir  $3 site -> build output in <stage>/public plus a firebase.json for it
+  mkdir -p "$2/public" && cp -R "$1/$(outdir "$1")/." "$2/public/" || return 1
+  py - "$1/firebase.json" "$2/firebase.json" "$3" <<'PY2'
+import json, os, sys
+src, dst, site = sys.argv[1:4]
+h = {}
+if os.path.exists(src):
+    try:
+        hs = json.load(open(src)).get("hosting", {})
+        h = next((x for x in hs if x.get("site") == site), hs[0] if hs else {}) if isinstance(hs, list) else hs
+    except Exception: h = {}
+# the project's own redirects, headers and rewrites come along; where the files are and which site is ours
+out = {k: v for k, v in h.items() if k in ("rewrites", "redirects", "headers", "cleanUrls", "trailingSlash", "i18n", "appAssociation")}
+out.update(site=site, public="public", ignore=["firebase.json", "**/.*"])
+out.setdefault("rewrites", [{"source": "**", "destination": "/index.html"}])
+json.dump({"hosting": out}, open(dst, "w"), indent=2)
+PY2
 }
 
 bump_version(){ # $1 version like 1.4.2+17  $2 build|patch|minor|major -> next version
@@ -381,6 +802,7 @@ dry_deploy(){ # $1 account $2 project id $3 project name $4 folder $5 package ma
   [ -n "$(node -p "(require('$root/package.json').scripts||{}).build||''" 2>/dev/null)" ] \
     && ok "package.json has a build script" || { warn "✗ package.json has no build script"; bad=1; }
   have "$pm" && ok "$pm is installed" || { warn "✗ $pm is not installed"; bad=1; }
+  have vercel && ok "Vercel CLI is installed  ${D}$(vercel --version 2>/dev/null | head -1)${R}" || { warn "✗ the Vercel CLI is not installed  ${D}npm i -g vercel${R}"; bad=1; }
   r="$(vc user "$token" 2>/dev/null)" && ok "Vercel login works  ${D}${r#*	} · ${acct}${R}" || { warn "✗ Vercel login failed for “${acct}”: ${r#ERR	}"; bad=1; }
   r="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)" && ok "project “${pname}” is reachable" || { warn "✗ cannot reach project “${pname}”: ${r#ERR	}"; bad=1; }
 
@@ -395,31 +817,111 @@ dry_deploy(){ # $1 account $2 project id $3 project name $4 folder $5 package ma
   printf "\n" >&2
 }
 
-# ── deploy ────────────────────────────────────────────────────────────────
-deploy(){ # $1 account  $2 project id  $3 project name  $4 folder
-  local acct="$1" pid="$2" pname="$3" root="$4" pm token team stage url flag domain log
-  [ -f "$root/package.json" ] || die "no package.json in $root"
-  pm="$(detect_pm "$root")"
-  vc proj_set "$root" account "$acct"; vc proj_set "$root" id "$pid"; vc proj_set "$root" name "$pname"
-  token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
-
-  step "$pname"
-  row "account" "$acct  ${D}$(vc acct_get "$acct" scope)${R}"
-  row "folder" "$root"
-  if [ -z "$PROD" ]; then
-    MENU_ITEMS=("main website" "test version"); MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}")
-    [ "$(menu_pick "Publish to" 0)" = 0 ] && PROD=yes || PROD=no
+dry_deploy_firebase(){ # $1 account $2 project/site $3 folder $4 package manager -> checks, then what would run; changes nothing
+  local acct="$1" proj="${2%%/*}" site="${2#*/}" root="$3" pm="$4" bad=0
+  step "Dry run · checks"
+  [ -n "$(node -p "(require('$root/package.json').scripts||{}).build||''" 2>/dev/null)" ] \
+    && ok "package.json has a build script" || { warn "✗ package.json has no build script"; bad=1; }
+  have "$pm" && ok "$pm is installed" || { warn "✗ $pm is not installed"; bad=1; }
+  if have firebase; then
+    ok "Firebase CLI is installed  ${D}$(firebase --version 2>/dev/null)${R}"
+    firebase login:list 2>/dev/null | grep -qF "$acct" && ok "signed in as $acct" || { warn "✗ $acct is not signed in to the Firebase CLI"; bad=1; }
+    firebase hosting:sites:list --project "$proj" --account "$acct" --json 2>/dev/null | grep -q "sites/$site\"" \
+      && ok "site “${site}” in project ${proj} is reachable" || { warn "✗ cannot reach site “${site}” in project ${proj}"; bad=1; }
+  else
+    warn "✗ the Firebase CLI is not installed  ${D}npm i -g firebase-tools${R}"; bad=1
   fi
-  [ "$PROD" = yes ] && web_version_guard "$root"
 
-  [ "$DRY" = yes ] && { dry_deploy "$acct" "$pid" "$pname" "$root" "$pm"; exit 0; }
+  step "Dry run · would run"
+  cmd "cd $root && $pm run build"
+  if [ "$PROD" = yes ]; then cmd "firebase deploy --only hosting --project $proj --account $acct  ${D}(from a temp copy of the build)${R}"
+  else cmd "firebase hosting:channel:deploy preview --expires 7d --project $proj --account $acct"; fi
+  row "target" "$([ "$PROD" = yes ] && echo "main website  ${D}${site}.web.app${R}" || echo 'test version  a preview URL for 7 days')"
+  printf "\n" >&2
+  [ "$bad" = 0 ] && ok "dry run passed — nothing was built, deployed or written" \
+                 || warn "dry run found problems above — nothing was built, deployed or written"
+  printf "\n" >&2
+}
 
-  stage="$(mktemp -d -t shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
+publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
+  local acct="$1" proj="${2%%/*}" site="${2#*/}" root="$3" pm="$4" stage log url out
+  stage="$(tmpd shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
   step "Building"
   cmd "cd $root && $pm run build"
   log="$stage-build.log"
   ( cd "$root" && $pm run build ) > >(tee "$log" >&2) 2>&1 || { fail "the build failed — nothing was published" "$log"; }
-  [ -f "$root/dist/index.html" ] || die "no dist/index.html after the build — is the Vite outDir something else?"
+  [ -n "$(outdir "$root")" ] || die "no index.html in dist/, build/, out/ or _site/ after the build — where does your build put its files?"
+  # published from a copy with its own firebase.json: nothing is added to your repo
+  stage_firebase "$root" "$stage" "$site" || die "could not copy the build output"
+
+  step "Publishing"
+  row "site" "$site  ${D}${proj}${R}"
+  row "target" "$([ "$PROD" = yes ] && echo 'main website' || echo 'test version · 7 days')"
+  log="$stage-deploy.log"
+  if [ "$PROD" = yes ]; then
+    cmd "firebase deploy --only hosting --project $proj --account $acct"
+    ( cd "$stage" && firebase deploy --only hosting --project "$proj" --account "$acct" --non-interactive ) > >(tee "$log" >&2) 2>&1 \
+      || fail "Firebase rejected the deploy — nothing was published" "$log"
+    url="https://${site}.web.app"
+    vc proj_set "$root" last_prod_version "$(node -p "require('$root/package.json').version||''" 2>/dev/null)"
+    vc proj_set "$root" last_prod_date "$(date '+%d %b %H:%M')"
+  else
+    cmd "firebase hosting:channel:deploy preview --expires 7d --project $proj --account $acct"
+    out="$(cd "$stage" && firebase hosting:channel:deploy preview --expires 7d --project "$proj" --account "$acct" --json 2> >(tee "$log" >&2))" \
+      || { printf '%s\n' "$out" >>"$log"; fail "Firebase rejected the preview — nothing was published" "$log"; }
+    url="$(printf '%s' "$out" | py -c 'import json,sys;r=json.load(sys.stdin).get("result",{});print(next((v.get("url","") for v in r.values() if isinstance(v,dict)),""))' 2>/dev/null)"
+    [ -n "$url" ] || { printf '%s\n' "$out" >>"$log"; fail "Firebase finished but returned no preview URL" "$log"; }
+  fi
+  printf %s "$url" | clip 2>/dev/null
+  step "Published"
+  row "link" "${B}${A}${url}${R}  ${D}copied${R}"
+  printf "\n" >&2
+}
+
+# ── deploy ────────────────────────────────────────────────────────────────
+deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 folder  $5 host (vercel|firebase)
+  local acct="$1" pid="$2" pname="$3" root="$4" host="${5:-vercel}" pm token team stage url flag domain log label
+  [ -f "$root/package.json" ] || die "no package.json in $root"
+  pm="$(detect_pm "$root")"
+  [ "$DRY" = yes ] || { [ "$host" = firebase ] && need_firebase || need_vercel; }   # before any question or write
+  # remember which project this folder publishes to — not in a dry run, which writes nothing
+  [ "$DRY" = yes ] || { vc proj_set "$root" account "$acct"; vc proj_set "$root" id "$pid"; vc proj_set "$root" name "$pname"; vc proj_set "$root" host "$host"; }
+  label="$(vc label_get "$pid")"
+
+  step "${label:-$pname}$([ -n "$label" ] && printf "  ${D}%s${R}" "$pname")"
+  if [ "$host" = firebase ]; then
+    row "host" "Firebase  ${D}${acct}${R}"
+    row "project" "${pid%%/*}"
+  else
+    row "host" "Vercel  ${D}${acct} · $(vc acct_get "$acct" scope)${R}"
+  fi
+  row "folder" "$root"
+  if [ -z "$PROD" ]; then
+    MENU_ITEMS=("main website" "test version")
+    if [ "$host" = firebase ]; then MENU_NOTES=("   ${D}updates ${pid#*/}.web.app${R}" "   ${D}a preview URL for 7 days, the main website untouched${R}")
+    else MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}"); fi
+    if [ "$(menu_pick "Publish to" 0)" = 0 ]; then
+      PROD=yes
+      # a single stray key must not replace the live site
+      if picked_by_key && [ "$DRY" != yes ] && ! confirm_y "Publish to the main website?"; then warn "cancelled — nothing was published"; exit 0; fi
+    else PROD=no; fi
+  fi
+  [ "$PROD" = yes ] && web_version_guard "$root"
+
+  if [ "$host" = firebase ]; then
+    [ "$DRY" = yes ] && { dry_deploy_firebase "$acct" "$pid" "$root" "$pm"; exit 0; }
+    publish_firebase "$acct" "$pid" "$root" "$pm"; return
+  fi
+
+  token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
+  [ "$DRY" = yes ] && { dry_deploy "$acct" "$pid" "$pname" "$root" "$pm"; exit 0; }
+
+  stage="$(tmpd shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
+  step "Building"
+  cmd "cd $root && $pm run build"
+  log="$stage-build.log"
+  ( cd "$root" && $pm run build ) > >(tee "$log" >&2) 2>&1 || { fail "the build failed — nothing was published" "$log"; }
+  [ -n "$(outdir "$root")" ] || die "no index.html in dist/, build/, out/ or _site/ after the build — where does your build put its files?"
 
   # publish from a copy outside the repo: no .git above it, so Vercel attaches no commit
   stage_dist "$root" "$stage" "$pid" "$(vc acct_get "$acct" org_id)" "$pname" || die "could not copy dist/"
@@ -440,7 +942,7 @@ deploy(){ # $1 account  $2 project id  $3 project name  $4 folder
     vc proj_set "$root" last_prod_version "$(node -p "require('$root/package.json').version||''" 2>/dev/null)"
     vc proj_set "$root" last_prod_date "$(date '+%d %b %H:%M')"
   fi
-  printf %s "$url" | pbcopy 2>/dev/null
+  printf %s "$url" | clip 2>/dev/null
   step "Published"
   row "link" "${B}${A}${url}${R}  ${D}copied${R}"
   printf "\n" >&2
@@ -449,7 +951,7 @@ deploy(){ # $1 account  $2 project id  $3 project name  $4 folder
 # ── main ──────────────────────────────────────────────────────────────────
 PROD=""; ROOT=""; DRY=no
 main(){
-  local arg rows=() a id nm u f note sel idx r folder
+  local arg rows=() a id nm u f note sel idx r folder i
   for arg in "$@"; do
     case "$arg" in
       --prod|--production) PROD=yes ;;
@@ -459,62 +961,103 @@ main(){
       --version|-V|-v)     echo "ship-site $VERSION"; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-site${R} ${D}%s${R}\n\n" "$VERSION"
-        printf "    ${A}ship-site${R}             your Vercel projects; pick one, it builds and publishes\n"
+        printf "    ${A}ship-site${R}             your Vercel projects and Firebase sites; pick one, it builds and publishes\n"
         printf "    ${A}ship-site --prod${R}      straight to the main website, no question asked\n"
-        printf "    ${A}ship-site --preview${R}   a fresh preview URL\n"
+        printf "    ${A}ship-site --preview${R}   a test URL: a fresh preview on Vercel, the 7-day preview channel on Firebase\n"
         printf "    ${A}ship-site --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
         printf "    ${A}ship-site ~/site${R}      treat that folder as the current project\n"
-        printf "    ${A}ship-site accounts${R}    add or remove Vercel accounts\n\n"
-        printf "  ${D}Run inside a Vite project and its Vercel project is preselected. Settings live in %s${R}\n\n" "$CONF"
+        printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts\n\n"
+        printf "  ${D}Run inside a web project and the project it publishes to is preselected. Settings live in %s${R}\n\n" "$CONF"
         exit 0 ;;
       *) ROOT="${arg/#\~/$HOME}"; [ -f "$ROOT/package.json" ] || die "no package.json in $ROOT" ;;
     esac
   done
   [ -t 0 ] || die "ship-site needs a terminal — run it, do not pipe into it"
   have python3 || die "python3 is required (it ships with macOS developer tools)"
-  need(){ # $1 what  $2 how to check  $3 install command -> asks, installs, or dies with the command
-    have "$2" && return
-    printf "     ${Y}!${R} %s is not installed\n     ${A}Install it now with  %s${R} ${D}(y/n) [yes]${R} ${A}›${R} " "$1" "$3" >&2
-    read -r a; case "$a" in [nN]*) die "install it yourself, then run again:  $3" ;; esac
-    $3 >&2 || die "that failed — run it yourself and try again:  $3"
-    have "$2" || die "$1 still not found — open a new terminal and run again"
-  }
-  have brew && need "node and npm" npm "brew install node" || have npm || die "node is required — install it from https://nodejs.org then run again"
-  need "the Vercel CLI" vercel "npm i -g vercel"
+  have npm || { have brew && need "node and npm" npm "brew install node"; } || have npm || die "node is required — install it from https://nodejs.org then run again"
   [ -n "$ROOT" ] || ROOT="$(find_root)" || ROOT=""
   [ -n "$ROOT" ] && ROOT="$(cd "$ROOT" && pwd)"
 
   banner "ship-site $VERSION" "build it, publish it, copy the link"
   [ "$DRY" = yes ] && sub "${Y}dry run — checks everything, then shows what it would do; nothing is built, deployed, created or written${R}"
-  [ -n "$(vc accounts)" ] || { step "No Vercel account on this Mac yet"; add_account >/dev/null || die "no account added"; }
-  refresh
+  refresh fresh   # the cached list comes up at once; it is refreshed when older than 10 minutes, or on "refresh"
+  if [ -z "$(vc landing)" ] && [ -z "$(vc accounts)" ] && [ -z "$(vc fb_accounts)" ]; then
+    step "No account on this Mac yet"
+    add_any_account || { printf "\n" >&2; exit 0; }
+    refresh
+  fi
 
+  local h lb rc fbsite vid names rank why best rcseen kind=() grp lines g
+  # what this folder says about where it deploys: its .firebaserc, firebase.json, .vercel/project.json, and its names
+  rc=""; fbsite=""; vid=""; names=""
+  if [ -n "$ROOT" ]; then
+    rc="$(firebaserc_project "$ROOT")"; fbsite="$(firebase_json_site "$ROOT")"; vid="$(vercel_json_project "$ROOT")"
+    names="$(slugify "$(node -p "require('$ROOT/package.json').name||''" 2>/dev/null)") $(slugify "$(basename "$ROOT")")"
+  fi
   while :; do
-    rows=(); MENU_ITEMS=(); MENU_NOTES=(); sel=0
-    while IFS=$'\t' read -r a id nm u f; do
+    rows=(); MENU_ITEMS=(); MENU_NOTES=(); kind=(); sel=-1; best=9; rcseen=no
+    # rank each project against this folder (0 path, 1 config, 2 name, 9 none), then group by account and host;
+    # the group holding the best match comes first, then Vercel, then Firebase
+    lines="$(vc landing | rank_rows "$ROOT" "$rc" "$fbsite" "$vid" "$names")"
+    grp=""; local ga="" gh=""
+    while IFS=$'\x1f' read -r a id nm u f h lb rank why; do
       [ -n "$id" ] || continue
-      rows+=("$a	$id	$nm	$f")
+      g="$a · $([ "$h" = firebase ] && echo Firebase || echo Vercel)"
+      if [ "$g" != "$grp" ]; then
+        [ -n "$grp" ] && { MENU_ITEMS+=("  + new project here"); MENU_NOTES+=("  ${D}in ${grp}${R}"); kind+=("newin"$'\x1f'"$gh"$'\x1f'"$ga"); }
+        MENU_ITEMS+=($'\x01'"$g"); MENU_NOTES+=(""); kind+=(head); grp="$g"; ga="$a"; gh="$h"
+      fi
+      [ "$h" = firebase ] && [ -n "$rc" ] && [ "${id%%/*}" = "$rc" ] && rcseen=yes
+      rows+=("$a"$'\x1f'"$id"$'\x1f'"$nm"$'\x1f'"$f"$'\x1f'"$h")
       note=""
-      if [ -n "$ROOT" ] && [ "$f" = "$ROOT" ]; then note="  ${G}● this folder${R}"; sel=$(( ${#rows[@]} - 1 ))
+      if [ "$rank" -lt 9 ]; then
+        note="  ${G}● ${why}${R}"
+        [ "$rank" -lt "$best" ] && { best=$rank; sel=${#MENU_ITEMS[@]}; }
       elif [ -n "$f" ]; then note="  ${D}$(sed "s|^$HOME|~|" <<<"$f")${R}"; fi
-      MENU_ITEMS+=("$(printf '%-24s' "$nm")"); MENU_NOTES+=("  ${D}$(printf '%-16s %-34s' "$a" "$u")${R}$note")
-    done < <(vc landing)
-    MENU_ITEMS+=("+ new project" "accounts" "refresh" "quit")
-    MENU_NOTES+=("  ${D}create one on Vercel by name${R}" "  ${D}add, remove, sign in again${R}" "  ${D}fetch the project list again${R}" "")
+      MENU_ITEMS+=("  $(printf '%-24s' "${lb:-$nm}")"); MENU_NOTES+=("  ${D}$(printf '%-32s' "$u")${R}$note"); kind+=("row:$(( ${#rows[@]} - 1 ))")
+    done <<<"$lines"
+    [ -n "$grp" ] && { MENU_ITEMS+=("  + new project here"); MENU_NOTES+=("  ${D}in ${grp}${R}"); kind+=("newin"$'\x1f'"$gh"$'\x1f'"$ga"); }
+    [ ${#rows[@]} -gt 0 ] && { MENU_ITEMS+=($'\x01'); MENU_NOTES+=(""); kind+=(head); }   # a blank line sets the actions apart
+    MENU_ITEMS+=("  + new project" "  label a project" "  accounts" "  refresh" "  quit")
+    MENU_NOTES+=("  ${D}a Vercel project or a Firebase site, by name${R}" "  ${D}your own name for one, e.g. the domain it serves${R}"
+                 "  ${D}Vercel and Firebase: add, remove, sign in again${R}" "  ${D}fetch the project list again${R}" "")
+    kind+=(new label accounts refresh quit)
+    [ "$sel" -ge 0 ] || sel=0
     step "Projects"
     [ -n "$ROOT" ] && sub "you are in $(sed "s|^$HOME|~|" <<<"$ROOT")"
-    idx="$(menu_pick "Pick one to publish" "$sel")"
-    case $(( idx - ${#rows[@]} )) in
-      0) r="$(new_project)" || continue
+    [ -n "$rc" ] && [ "$rcseen" = no ] && sub "${Y}this folder's .firebaserc names Firebase project “${rc}”, which none of your signed-in accounts can see — add its Google account under accounts${R}"
+    MENU_FIXED=$([ ${#rows[@]} -gt 0 ] && echo 6 || echo 5)   # the actions stay on screen; only the projects scroll
+    MENU_NOKEY=""; for i in "${!kind[@]}"; do case "${kind[$i]}" in row:*) MENU_NOKEY="$MENU_NOKEY $i" ;; esac; done
+    idx="$(menu_pick "Pick one to publish" "$sel")"; MENU_FIXED=0; MENU_NOKEY=""   # set for that menu only; it ran in a subshell
+    case "${kind[$idx]}" in
+      new|newin*)
+         if [ "${kind[$idx]}" = new ]; then r="$(new_project)" || continue
+         else IFS=$'\x1f' read -r _ h a <<<"${kind[$idx]}"; r="$(new_project "$h" "$a")" || continue; fi
          folder="$(choose_folder "")" || continue
-         deploy "${r%%	*}" "$(cut -f2 <<<"$r")" "$(cut -f3 <<<"$r")" "$folder"; exit 0 ;;
-      1) accounts_menu; refresh; continue ;;
-      2) refresh; continue ;;
-      3) printf "\n" >&2; exit 0 ;;
+         IFS=$'\t' read -r h a id nm <<<"$r"
+         [ "$DRY" = yes ] || { vc proj_set "$folder" account "$a"; vc proj_set "$folder" id "$id"; vc proj_set "$folder" name "$nm"; vc proj_set "$folder" host "$h"; }
+         deploy "$a" "$id" "$nm" "$folder" "$h"; exit 0 ;;
+      label)
+         [ ${#rows[@]} -gt 0 ] || { warn "no projects to label yet"; continue; }
+         local ids=() k; MENU_ITEMS=(); MENU_NOTES=()
+         for k in "${rows[@]}"; do IFS=$'\x1f' read -r a id nm f h <<<"$k"; ids+=("$id"); MENU_ITEMS+=("$(printf '%-28s' "$nm")"); MENU_NOTES+=("  ${D}$(vc label_get "$id")${R}"); done
+         MENU_ITEMS+=("← back"); MENU_NOTES+=("")
+         step "Label which project"
+         MENU_NOKEY="$(nokey_rows "${#rows[@]}")"
+         idx="$(menu_pick "Project" 0)"; MENU_NOKEY=""
+         [ "$idx" -lt ${#rows[@]} ] || continue
+         IFS=$'\x1f' read -r a id nm f h <<<"${rows[$idx]}"
+         vc label_set "$id" "$(ask "Label for ${nm} (blank removes it)" "$(vc label_get "$id")")"
+         ok "saved — only a name for you, nothing changes on $([ "$h" = firebase ] && echo Firebase || echo Vercel)"
+         continue ;;
+      accounts) accounts_menu; refresh; continue ;;
+      refresh)  refresh; continue ;;
+      quit)     printf "\n" >&2; exit 0 ;;
     esac
-    IFS=$'\t' read -r a id nm f <<<"${rows[$idx]}"
+    idx="${kind[$idx]#row:}"
+    IFS=$'\x1f' read -r a id nm f h <<<"${rows[$idx]}"
     folder="$(choose_folder "$f")" || continue
-    deploy "$a" "$id" "$nm" "$folder"; exit 0
+    deploy "$a" "$id" "$nm" "$folder" "$h"; exit 0
   done
 }
 

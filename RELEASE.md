@@ -10,11 +10,24 @@ Key facts:
 
 ## 1. Decide the version
 
-Patch for fixes, minor for a new option or tool, major if settings or flags change in a way that breaks a user. First release is `1.0.0`.
+Patch for fixes, minor for a new option or tool, major for a big step or anything that breaks an existing user. First release was `1.0.0`.
+
+Every version ships as a beta first: `X.Y.Z-beta.1`, then `-beta.2` for fixes, then `X.Y.Z` when it is right. Stable users only ever see `X.Y.Z`.
+
+## The two channels
+
+| | stable | beta |
+| --- | --- | --- |
+| tag | `vX.Y.Z` | `vX.Y.Z-beta.N` |
+| GitHub release | normal, becomes `latest` | marked pre-release, never `latest` |
+| who gets it | everyone: one-liners, hub, Homebrew | only Macs switched with `developer-tools beta` |
+| Homebrew tap | updated by the workflow | untouched |
+
+A beta is found through the GitHub API (newest release, pre-releases included), so a hub on the beta channel also gets the stable release the moment it is tagged.
 
 ## 2. Bump
 
-`VERSION="X.Y.Z"` in `ship-apk/ship-apk`, `ship-site/ship-site` and `developer-tools`. Update the example tag in README.md if it still shows an older number.
+`VERSION="X.Y.Z-beta.1"` (or `X.Y.Z` for the stable tag) in `ship-apk/ship-apk`, `ship-site/ship-site` and `developer-tools`; the workflow refuses a tag that does not match all three.
 
 ## 3. Rehearse on this Mac
 
@@ -31,16 +44,26 @@ Commit title should say what changed for users, it becomes the release notes. `/
 ## 5. Tag
 
 ```sh
-git tag vX.Y.Z && git push origin vX.Y.Z
+git tag vX.Y.Z-beta.1 && git push origin vX.Y.Z-beta.1    # beta: pre-release, beta channel only
+git tag vX.Y.Z && git push origin vX.Y.Z                  # stable: everyone, Homebrew too
 ```
 
 The release workflow then: tests, checks the tag, publishes the GitHub release with `ship-apk`, `ship-site` and `developer-tools` attached, writes the notes from commit titles since the previous tag (so write titles a user would want to read), and pushes the filled-in formulas to the tap.
 
-## 6. Verify
+## 6. Try the beta yourself
+
+```sh
+developer-tools beta && developer-tools install     # this Mac is now on the beta
+ship-site -v                                        # X.Y.Z-beta.1
+developer-tools stable && developer-tools install   # back, whenever
+```
+
+## 7. Verify
 
 ```sh
 gh run watch --repo azharbinanwar/developer-tools
 curl -sIL -o /dev/null -w "%{http_code}\n" https://github.com/azharbinanwar/developer-tools/releases/latest/download/ship-apk   # 200
+gh release view vX.Y.Z-beta.1 --json isPrerelease -q .isPrerelease                                                               # true for a beta
 brew update && brew info azharbinanwar/tap/ship-apk | head -1                                                                   # shows X.Y.Z
 ```
 

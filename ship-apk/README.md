@@ -118,9 +118,57 @@ Passwords show one `*` per character; Enter keeps a saved one.
 
 The mail template is plain text in `config.json` (mailbox › edit the mail template) with `{name}` `{app}` `{version}` `{link}` `{notes}` `{sender}`.
 
+## Keys
+
+`Enter`, `↑` `↓`, `Esc` back and `q` quit work everywhere; apps and projects get `1`–`9`. Each option's own key is shown as `[x]` next to it. Change any of them in `~/.config/developer-tools/keys.json` (see the [main README](../README.md#keys)).
+
+| Key | Option | Action name for keys.json |
+| --- | --- | --- |
+| `a` | add this app | `app.add` |
+| `e` | edit an app | `app.edit` |
+| `m` | mailbox | `mailbox` |
+| `q` | quit | `quit` |
+| `s` | ship as | `version.keep` |
+| `b` | bump | `version.bump` |
+| `f` | build a fresh one | `build.fresh` |
+| `l` | use the last build | `build.last` |
+| `a` | back to apps | `apps` |
+| `s` | send the link | `mail.send` |
+| `x` | skip mail this time | `mail.skip` |
+| `c` | change to, cc, bcc or subject | `mail.change` |
+| `m` | set up mailbox | `mail.setup_box` |
+| `e` | set up this app's email | `mail.setup_app` |
+| `u` | use these | `notes.use` |
+| `w` | write my own | `notes.write` |
+| `x` | no notes | `notes.none` |
+| `o` | open the apk folder | `done.folder` |
+| `l` | open the link in the browser | `done.link` |
+| `r` | retry the upload | `upload.retry` |
+| `t` | to | `edit.to` |
+| `c` | cc | `edit.cc` |
+| `b` | bcc | `edit.bcc` |
+| `s` | subject | `edit.subject` |
+| `a` | app name | `edit.name` |
+| `i` | app id | `edit.id` |
+| `f` | folder | `edit.folder` |
+| `r` | credentials | `edit.credentials` |
+| `d` | remove this app | `edit.remove` |
+| `a` | address | `box.address` |
+| `p` | password | `box.password` |
+| `h` | smtp host | `box.host` |
+| `o` | port | `box.port` |
+| `f` | from name | `box.from` |
+| `t` | send a test to myself | `box.test` |
+| `e` | edit the mail template | `box.template` |
+| `a` | add to | `people.add` |
+| `r` | rename | `person.rename` |
+| `c` | change address | `person.address` |
+| `d` | remove | `person.remove` |
+| `Esc` | back | `back` |
+
 ## Needs
 
-macOS, python3 and curl (built in), plus `flutter` or `fvm`. `qrencode` is optional.
+bash, python3 and curl (built in on macOS and Linux; Git Bash plus Python on Windows), plus `flutter` or `fvm`. `qrencode` is optional. The APK folder and links open with the desktop's own opener; the link is copied if a clipboard tool exists.
 
 ## Where things live
 

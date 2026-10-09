@@ -17,15 +17,20 @@ jobs:
           for f in ship-apk/ship-apk ship-site/ship-site developer-tools; do
             grep -q "^VERSION=\"${GITHUB_REF_NAME#v}\"" "$f" || { echo "$f is not at $GITHUB_REF_NAME"; exit 1; }
           done
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "tag must look like v1.2.0 or v1.2.0-beta.1"; exit 1 ;;
+          esac
       - name: release notes from commit titles since the previous tag
         run: |
           prev="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          case "$GITHUB_REF_NAME" in *-*) echo "## Beta — try it with \`developer-tools beta\` then \`developer-tools install\`; stable users are not affected" > notes.md ;; *) : > notes.md ;; esac
           { echo "## What changed"; echo
             git log --no-merges --format='- %s' ${prev:+$prev..}"$GITHUB_REF_NAME"
             echo; echo "## Install"; echo
             echo '```sh'; echo 'brew install azharbinanwar/tap/developer-tools'; echo '```'
             echo; echo "Or run without installing: see the [README](https://github.com/azharbinanwar/developer-tools#readme)."
-          } > notes.md
+          } >> notes.md
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -33,9 +38,11 @@ jobs:
             ship-site/ship-site
             developer-tools
           body_path: notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
-  homebrew:
+  homebrew:   # the tap only ever carries stable releases
     needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
