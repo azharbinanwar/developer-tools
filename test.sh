@@ -486,10 +486,11 @@ case "$2" in %s) wc -c < "$3" | tr -d ' ' ;; %Y) echo 1700000000 ;; %a) echo 600
 FAKE
   printf '#!/bin/sh\n[ "$1" = "-d" ] || { echo bad >&2; exit 1; }\necho "gnu-date $2 $3"\n' > "$gnu/date"; chmod +x "$gnu/stat" "$gnu/date"
   f="$(mktemp)"; printf 'abcde' > "$f"
-  check "linux: fsize via stat -c"            is "$(PATH="$gnu:$PATH" fsize "$f")" 5
-  check "linux: fmtime via stat -c"           is "$(PATH="$gnu:$PATH" fmtime "$f")" 1700000000
-  check "linux: fmode via stat -c"            is "$(PATH="$gnu:$PATH" fmode "$f")" 600
-  check "linux: fdate via date -d"            is "$(PATH="$gnu:$PATH" fdate 1700000000 '+%d')" "gnu-date @1700000000 +%d"
+  check "linux: fsize via stat -c"            is "$(OS=linux PATH="$gnu:$PATH" fsize "$f")" 5
+  check "linux: fmtime via stat -c"           is "$(OS=linux PATH="$gnu:$PATH" fmtime "$f")" 1700000000
+  check "linux: fmode via stat -c"            is "$(OS=linux PATH="$gnu:$PATH" fmode "$f")" 600
+  check "linux: fdate via date -d"            is "$(OS=linux PATH="$gnu:$PATH" fdate 1700000000 '+%d')" "gnu-date @1700000000 +%d"
+  check "linux: BSD flags never reach GNU stat" bash -c "OS=linux; PATH='$gnu:$PATH'; source ./ship-site/ship-site; OS=linux; [ \"\$(fmode '$f')\" = 600 ]"
   check "clip: no tool → false, no crash"     not bash -c 'PATH=/bin; source ./ship-site/ship-site; printf x | clip'
   check "open_it: nothing to open with → false" not bash -c 'OS=linux; PATH=/nonexistent; source ./ship-site/ship-site; OS=linux; open_it /tmp'
   check "tmpf: makes a file"                  test -f "$(tmpf abc)"
