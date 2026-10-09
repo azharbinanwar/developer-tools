@@ -139,10 +139,15 @@ def fb_get(token, ep):  # one Hosting API read; {} on any trouble
         with urllib.request.urlopen(req, timeout=20) as r: raw = r.read(); return json.loads(raw) if raw else {}
     except Exception: return {}
 
-def fb_domain_of(token, pid, site):  # the site's connected custom domain, if one is live; "" otherwise
+def dom_state(cd):  # a customDomain -> dns (records not seen yet), cert (answers on http, HTTPS on its way), live
+    if cd.get("hostState") != "HOST_ACTIVE": return "dns"
+    c = cd.get("cert") or {}
+    return "live" if c.get("state") == "CERT_ACTIVE" and c.get("type") != "TEMPORARY" else "cert"
+
+def fb_domain_of(token, pid, site):  # the site's connected custom domain and its state, "" when none; the shortest when several
     ds = fb_get(token, "projects/%s/sites/%s/customDomains" % (pid, site)).get("customDomains", [])
-    live = [d_["name"].rsplit("/", 1)[-1] for d_ in ds if d_.get("hostState") == "HOST_ACTIVE"]
-    return min(live, key=len) if live else ""
+    ds = sorted(ds, key=lambda d_: (dom_state(d_) != "live", len(d_["name"])))
+    return (ds[0]["name"].rsplit("/", 1)[-1], dom_state(ds[0])) if ds else ("", "")
 
 def pages(token, team, ep, key):
     out, until = [], None
@@ -203,9 +208,9 @@ elif op == "fb_refresh":  # every Firebase CLI login's projects with a hosting s
             if tok and os.environ.get("SHIP_SITE_NO_DOMAINS") != "1":
                 from concurrent.futures import ThreadPoolExecutor
                 mine = [c for c in new if c.get("host") == "firebase" and c["account"] == e]
-                for c, dom in zip(mine, ThreadPoolExecutor(16).map(lambda c: fb_domain_of(tok, *c["id"].split("/", 1)), mine)):
-                    c["url"] = dom or c["name"] + ".web.app"
-                    if dom: d.setdefault("domains", {})[c["id"]] = dom
+                for c, (dom, state) in zip(mine, ThreadPoolExecutor(16).map(lambda c: fb_domain_of(tok, *c["id"].split("/", 1)), mine)):
+                    c["url"] = dom if state == "live" else c["name"] + ".web.app"
+                    if dom: d.setdefault("domains", {})[c["id"]] = dom; d.setdefault("domain_state", {})[c["id"]] = state
         except Exception as x:
             sys.stderr.write("%s\t%s\n" % (e, x))
             new += [c for c in old if c.get("host") == "firebase" and c.get("account") == e]
@@ -223,7 +228,8 @@ elif op == "landing":   # cached projects: account id name url folder host label
         h, st = c.get("host", "vercel"), stats.get(c["id"], {})
         if (h == "vercel" and c["account"] in d["accounts"]) or (h == "firebase" and c["account"] in d.get("fb_accounts", [])):
             print("\x1f".join([c["account"], c["id"], c["name"], c["url"], folders.get(c["id"], ""), h, labels.get(c["id"], ""),
-                               c.get("project", ""), str(st.get("count", "") or ""), ago(st.get("last")), doms.get(c["id"], "")]))
+                               c.get("project", ""), str(st.get("count", "") or ""), ago(st.get("last")), doms.get(c["id"], ""),
+                               d.get("domain_state", {}).get(c["id"], "")]))
 elif op == "stat_add":  # id -> one more publish, now
     import time
     st = d.setdefault("stats", {}).setdefault(a[0], {}); st["count"] = st.get("count", 0) + 1; st["last"] = int(time.time()); save()
@@ -252,7 +258,7 @@ elif op in ("fb_domain", "fb_records"):  # token project site domain -> the DNS 
         recs += [r for g in ((cd.get("cert") or {}).get("verification") or {}).get("dns", {}).get("desired", []) for r in g.get("records", [])]
         if recs or cd.get("hostState") == "HOST_ACTIVE": break
         time.sleep(2)
-    if not recs: print("live\t%s\t%s" % (cd.get("hostState", ""), cd.get("ownershipState", ""))); sys.exit(0)
+    if dom_state(cd) == "live" or not recs: print("%s\t%s\t%s" % (dom_state(cd), cd.get("hostState", ""), (cd.get("cert") or {}).get("state", ""))); sys.exit(0)
     for r in recs:   # records already in place come back too, marked with no action; only the ones to add are shown
         if r.get("requiredAction") == "ADD": print("%s\t%s\t%s" % (r["type"], r["domainName"], r["rdata"]))
 elif op == "label_set":
@@ -265,8 +271,10 @@ elif op == "domain_set":  # id domain -> remembered at once, shown as pending un
     doms = d.setdefault("domains", {})
     if a[1]: doms[a[0]] = a[1]
     else: doms.pop(a[0], None)
+    d.get("domain_state", {}).pop(a[0], None)
     save()
 elif op == "domain_get": print(d.get("domains", {}).get(a[0], ""))
+elif op == "domain_state": print(d.get("domain_state", {}).get(a[0], ""))   # dns, cert or live, from the last refresh; "" when never seen
 elif op == "folder_of":  print(next((f for f, pr in sorted(d["projects"].items()) if pr.get("id") == a[0]), ""))
 elif op == "fb_accounts": [print(e) for e in d.get("fb_accounts", [])]
 elif op == "stamp":     import time; d["refreshed_at"] = int(time.time()); save()
@@ -799,7 +807,7 @@ rank_rows(){ # stdin: landing rows; $1 folder $2 .firebaserc project $3 firebase
 import sys
 root, rc, fbsite, vid = sys.argv[1:5]
 names = set(n for n in sys.argv[5].split() if n)
-rows = [(l.rstrip("\n").split("\x1f") + [""] * 11)[:11] for l in sys.stdin if l.strip()]
+rows = [(l.rstrip("\n").split("\x1f") + [""] * 12)[:12] for l in sys.stdin if l.strip()]
 def rank(r):
     a, i, n, u, f, h, lb = r[:7]
     if root and f == root: return 0, "this folder"
@@ -1064,9 +1072,15 @@ fb_token_for(){ # $1 account -> the CLI's token, renewing it with one harmless C
   [ -n "$tok" ] || { firebase projects:list --account "$1" >/dev/null 2>&1; tok="$(vc fb_token "$1")"; }
   printf '%s' "$tok"
 }
+dom_note(){ # $1 state from the last refresh -> the short note next to a domain that is not fully live
+  case "$1" in cert) echo "(up on http, HTTPS soon)" ;; *) echo "(waiting for DNS)" ;; esac
+}
 show_records(){ # $1 project $2 site $3 domain $4 records (type<TAB>host<TAB>value lines, or "live…") -> the table, copied
   local proj="$1" site="$2" dom="$3" out="$4" t h v text="" base
-  if [ "${out%%	*}" = live ]; then ok "${dom} is connected and live — nothing to add"; vc fb_refresh 2>/dev/null; return 0; fi
+  case "${out%%	*}" in
+    live) ok "${dom} is live with HTTPS — nothing to add"; vc fb_refresh 2>/dev/null; return 0 ;;
+    cert) ok "${dom} is up on http — DNS is through, the HTTPS certificate is on its way, nothing to add"; vc fb_refresh 2>/dev/null; return 0 ;;
+  esac
   # the registrar wants the host without the domain: admin for admin.example.com, @ for example.com itself
   base="$(printf '%s' "$dom" | awk -F. '{print $(NF-1)"."$NF}')"
   step "Add these records at your registrar (Namecheap: Advanced DNS)  ${D}for ${base}${R}"
@@ -1090,7 +1104,10 @@ domain_status(){ # $1 account $2 project/site -> one line on a saved domain: liv
   [ "$(vc url_get "$2")" = "$dom" ] && { row "domain" "${dom}  ${G}live${R}"; return 0; }
   tok="$(fb_token_for "$acct")"; [ -n "$tok" ] || return 1
   out="$(vc fb_records "$tok" "$proj" "$site" "$dom")" || { warn "${dom} is saved but ${out#ERR	} — custom domain › connect it now"; return 1; }
-  if [ "${out%%	*}" = live ]; then vc fb_refresh 2>/dev/null; row "domain" "${dom}  ${G}live now${R}  ${D}the list shows it from here on${R}"; return 0; fi
+  case "${out%%	*}" in
+    live) vc fb_refresh 2>/dev/null; row "domain" "${dom}  ${G}live with HTTPS${R}  ${D}the list shows it from here on${R}"; return 0 ;;
+    cert) vc fb_refresh 2>/dev/null; row "domain" "${dom}  ${G}up on http${R}  ${D}DNS is through; Firebase is issuing the HTTPS certificate, usually under an hour — nothing to do${R}"; return 1 ;;
+  esac
   base="$(printf '%s' "$dom" | awk -F. '{print $(NF-1)"."$NF}')"
   while IFS=$'\t' read -r t h v; do
     [ -n "$t" ] || continue
@@ -1121,7 +1138,7 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
     fi
     row "folder" "$root"
     if [ -n "$domain" ]; then
-      [ "$host" = firebase ] && [ "$(vc url_get "$pid")" != "$domain" ] && row "domain" "${domain}  ${Y}DNS pending${R}  ${D}also ${pid#*/}.web.app, which stays as is${R}" \
+      [ "$host" = firebase ] && [ "$(vc url_get "$pid")" != "$domain" ] && row "domain" "${domain}  ${Y}$(dom_note "$(vc domain_state "$pid")")${R}  ${D}also ${pid#*/}.web.app, which stays as is${R}" \
                                                                         || row "domain" "${domain}  ${D}also ${pid#*/}.$([ "$host" = firebase ] && echo web.app || echo vercel.app), which stays as is${R}"
     else row "domain" "${D}none yet${R}"; fi
     [ -n "$PROD" ] && break
@@ -1263,7 +1280,7 @@ main(){
     refresh
   fi
 
-  local h lb rc fbsite vid names rank why best rcseen kind=() grp lines g pj cnt last dom pc pgrp ind st
+  local h lb rc fbsite vid names rank why best rcseen kind=() grp lines g pj cnt last dom dst pc pgrp ind st
   # what this folder says about where it deploys: its .firebaserc, firebase.json, .vercel/project.json, and its names
   rc=""; fbsite=""; vid=""; names=""
   if [ -n "$ROOT" ]; then
@@ -1276,7 +1293,7 @@ main(){
     # the group holding the best match comes first, then Vercel, then Firebase
     lines="$(vc landing | rank_rows "$ROOT" "$rc" "$fbsite" "$vid" "$names")"
     grp=""; pgrp=""; local ga="" gh=""
-    while IFS=$'\x1f' read -r a id nm u f h lb pj cnt last dom rank why pc; do
+    while IFS=$'\x1f' read -r a id nm u f h lb pj cnt last dom dst rank why pc; do
       [ -n "$id" ] || continue
       g="$a · $([ "$h" = firebase ] && echo Firebase || echo Vercel)"
       if [ "$g" != "$grp" ]; then
@@ -1297,7 +1314,7 @@ main(){
         [ "$rank" -lt "$best" ] && { best=$rank; sel=${#MENU_ITEMS[@]}; }
       elif [ -n "$f" ]; then note="  ${D}$(sed "s|^$HOME|~|" <<<"$f")${R}"; fi
       st=""; [ -n "$cnt" ] && st="${cnt}× · ${last}"
-      if [ -n "$dom" ] && [ "$dom" != "$u" ]; then u="$dom (DNS pending)"; fi
+      if [ -n "$dom" ] && [ "$dom" != "$u" ]; then u="$dom $(dom_note "$dst")"; fi
       case "$u" in *.web.app|*.vercel.app) ;; *) st="$st  also ${nm}.$([ "$h" = firebase ] && echo web.app || echo vercel.app)" ;; esac
       MENU_ITEMS+=("  ${ind}$(printf '%-24s' "${lb:-$nm}")"); MENU_NOTES+=("  ${D}$(printf '%-32s %-13s' "$u" "$st")${R}$note"); kind+=("row:$(( ${#rows[@]} - 1 ))")
     done <<<"$lines"

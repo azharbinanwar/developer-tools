@@ -303,7 +303,7 @@ echo "── ship-site"
   check "vc: bad token → ERR line"            grep -q "^ERR" <<<"$(vc user not-a-token 2>/dev/null || true)"
   check "vc: bad token exits non-zero"        not vc user not-a-token
   vc cache_add me prj_9 site-a site-a.vercel.app; vc proj_set /tmp/site-a id prj_9
-  check "landing: cached row with its folder" is "$(vc landing)" $'me\x1fprj_9\x1fsite-a\x1fsite-a.vercel.app\x1f/tmp/site-a\x1fvercel\x1f\x1f\x1f\x1f\x1f'
+  check "landing: cached row with its folder" is "$(vc landing)" $'me\x1fprj_9\x1fsite-a\x1fsite-a.vercel.app\x1f/tmp/site-a\x1fvercel\x1f\x1f\x1f\x1f\x1f\x1f'
   vc stat_add prj_9; vc stat_add prj_9
   check "stats: count and last date on the row" is "$(vc landing | cut -d$'\x1f' -f9,10 | tr $'\x1f' ' ')" "2 today"
   check "stats: stat_get"                       is "$(vc stat_get prj_9 | tr '\t' ' ')" "2 today"
@@ -312,6 +312,7 @@ echo "── ship-site"
   vc domain_set prj_9 site-a.com
   check "domain: saved per project"             is "$(vc domain_get prj_9)" site-a.com
   check "domain: on the landing row"            is "$(vc landing | cut -d$'\x1f' -f11)" site-a.com
+  check "domain: no state before a refresh"     is "$(vc domain_state prj_9)" ""
   vc domain_set prj_9 ""
   check "domain: blank removes it"              is "$(vc domain_get prj_9)" ""
   check "fb_token: nothing without a CLI login" is "$(vc fb_token a@x.com)" ""
@@ -427,7 +428,7 @@ FAKE
 m${US}prj_v2${US}my-app${US}my-app.vercel.app${US}${US}vercel${US}
 g@x${US}shop-1/shop-1${US}shop-1${US}shop-1.web.app${US}${US}firebase${US}
 g@x${US}other/other${US}other${US}other.web.app${US}/the/folder${US}firebase${US}"
-  rr(){ rank_rows "$@" <<<"$landing" | cut -d"$US" -f3,12 | tr "$US" ' '; }
+  rr(){ rank_rows "$@" <<<"$landing" | cut -d"$US" -f3,13 | tr "$US" ' '; }
   check "rank: saved folder path wins"             grep -qx "other 0" <<<"$(rr /the/folder "" "" "" "")"
   check "rank: .firebaserc project is config"      grep -qx "shop-1 1" <<<"$(rr /x shop-1 "" "" "")"
   check "rank: firebase.json site is config"       grep -qx "shop-1 1" <<<"$(rr /x "" shop-1 "" "")"
@@ -442,7 +443,7 @@ g@x${US}other/other${US}other${US}other.web.app${US}/the/folder${US}firebase${US
 g@x${US}other/other${US}other${US}other.web.app${US}${US}firebase${US}
 g@x${US}shop-1/shop-admin${US}shop-admin${US}shop-admin.web.app${US}${US}firebase${US}${US}Shop"
   check "sites: a project's sites stay together"   is "$(rank_rows /x "" "" "" "" <<<"$two" | cut -d"$US" -f3 | tr '\n' ' ')" "shop-1 shop-admin other "
-  check "sites: each row knows its project's size" is "$(rank_rows /x "" "" "" "" <<<"$two" | cut -d"$US" -f14 | tr '\n' ' ')" "2 2 1 "
+  check "sites: each row knows its project's size" is "$(rank_rows /x "" "" "" "" <<<"$two" | cut -d"$US" -f15 | tr '\n' ' ')" "2 2 1 "
   check "label guess: admin from the folder"       is "$(guess_label /x/SukunGardenAdmin)" admin
   check "label guess: landing from a web folder"   is "$(guess_label /x/sukun-garden-web)" landing
   check "label guess: nothing from a plain name"   is "$(guess_label /x/thoub)" ""
@@ -575,7 +576,10 @@ FAKE
   check "records: host shown the registrar's way"           grep -q "CNAME  admin  " <<<"$out"
   check "records: _acme-challenge host kept short"           grep -q "_acme-challenge.admin" <<<"$out"
   check "records: @ for the domain itself"                   grep -q "A      @" <<<"$out"
-  check "records: live means nothing to add"                 grep -q "connected and live" <<<"$(bash -c 'source ./ship-site/ship-site; show_records shop-1 shop-1 a.example.com "live	HOST_ACTIVE"' 2>&1)"
+  check "records: live means nothing to add"                 grep -q "live with HTTPS" <<<"$(bash -c 'source ./ship-site/ship-site; show_records shop-1 shop-1 a.example.com "live	HOST_ACTIVE	CERT_ACTIVE"' 2>&1)"
+  check "records: cert pending is up on http"                grep -q "up on http" <<<"$(bash -c 'source ./ship-site/ship-site; show_records shop-1 shop-1 a.example.com "cert	HOST_ACTIVE	CERT_VALIDATING"' 2>&1)"
+  check "row note: waiting for DNS"                          is "$(dom_note dns)" "(waiting for DNS)"
+  check "row note: certificate pending says it is up"        is "$(dom_note cert)" "(up on http, HTTPS soon)"
   check "status: nothing without a saved domain"             is "$(bash -c 'source ./ship-site/ship-site; domain_status a@x.com shop-1/shop-1' 2>&1)" ""
   out="$(bash -c 'source ./ship-site/ship-site; vc domain_set shop-1/shop-1 shop.dev; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
   check "done: a pending domain adds the check option"       grep -q "check the domain again" <<<"$out"
