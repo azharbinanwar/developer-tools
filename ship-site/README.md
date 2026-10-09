@@ -62,7 +62,7 @@ For Firebase, nothing has to be set up in your repo: no `firebase init`, no `fir
 
 - **+ new project**: a Vercel project, or a Firebase site — inside one of your existing Firebase projects (`<name>.web.app`), or in a brand-new Firebase project made from just a name (free plan, Hosting only, no billing). The name you type is cleaned to what the host allows (`Admin.Sukun Garden` → `admin-sukun-garden`) and shown back as **create admin-sukun-garden.web.app** before anything is made; **change the name** asks again. With no account on that host yet, it signs you in first. It asks which account only when you have more than one. One Firebase project can hold several sites on the free plan: a landing page on `sukun-garden.web.app` and the admin on `sukun-garden-admin.web.app`, say.
 - **label a project**: your own name for it: `admin`, `landing`, the domain it serves. Shown in the list and when publishing; it changes nothing on Vercel or Firebase. The first time a folder publishes to a project, a label is suggested from the folder name (`SukunGardenAdmin` → `admin`); Enter takes it, type your own, or leave it blank.
-- **custom domain**: your own domain or subdomain (`sukungarden.com`, `admin.sukungarden.com`) for a project, saved at once as a reminder and shown on its row. On Firebase you can also **connect it now**: it prints the DNS records to add at your registrar and copies them; the row says **DNS pending** until Firebase sees the records, then shows the domain in place of `<site>.web.app` and the published link uses it. The `.web.app` address keeps working either way. Or **just keep it as a reminder** and connect it another time. Vercel domains are added on vercel.com, which shows its records there; the reminder is kept here all the same.
+- **custom domain**: your own domain or subdomain (`example.com`, `admin.example.com`, with its ending) for a project, saved at once as a reminder and shown on its row. On Firebase you can also **connect it now**: it prints the DNS records the way a registrar wants them (host `admin`, or `@` for the domain itself) and copies them; the row says **DNS pending** until Firebase sees the records, then shows the domain in place of `<site>.web.app` and the published link uses it. The `.web.app` address keeps working either way. Or **just keep it as a reminder** and connect it another time. Vercel domains are added on vercel.com, which shows its records there; the reminder is kept here all the same.
 - **accounts**: add or remove Vercel accounts (browser sign-in or a pasted token, then the team scope) and Firebase accounts (Google sign-in in the browser). With no account yet, it starts by adding one.
 
 ### Several accounts
@@ -83,11 +83,12 @@ Inside a project, that folder is built. Outside one, the folder the project was 
    domain      admin.sukungarden.com  DNS pending  also sukun-garden.web.app, which stays as is
  ❯ [m]  main website    updates sukun-garden.web.app and admin.sukungarden.com once live
    [t]  test version    a preview URL for 7 days, the main website untouched
+   [s]  new site here   another <name>.web.app in sukun-garden; this folder publishes there instead
    [d]  custom domain   admin.sukungarden.com, saved as a reminder; connect it now or later
         ← back          another project or site
 ```
 
-**main website** (production) or **test version**. `--prod` and `--preview` skip the question. **custom domain** saves your domain for this project right here (see [Projects](#1-projects)); the screen redraws with it.
+**main website** (production) or **test version**. `--prod` and `--preview` skip the question. **new site here** (Firebase) makes one more `<name>.web.app` site in the same project, suggested from the folder name (`SukunGardenAdmin` → `admin-sukun-garden`), confirmed before it is created; this folder then publishes there. **custom domain** saves your domain for this project right here (see [Projects](#1-projects)); the screen redraws with it.
 
 If another folder already publishes to this project, you are told which one and asked `y` before anything is built; any other key goes back to the list with nothing changed. A folder moving to a different project is not asked: that is the normal way to give the admin its own site.
 
@@ -157,6 +158,7 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 | `n` | new project | `project.new` |
 | `l` | label a project | `project.label` |
 | `d` | custom domain | `project.domain` |
+| `s` | new site here (Firebase, on Publish to) | `site.new` |
 | `c` | connect it now (a Firebase custom domain) | `domain.connect` |
 | `r` | just keep it as a reminder | `domain.remember` |
 | `o` | open the link in the browser (after publishing) | `done.link` |

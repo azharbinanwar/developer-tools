@@ -499,8 +499,8 @@ FAKE
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "myp" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy: a linked folder is not asked again"         not grep -q "Label for" <<<"$out"
   check "deploy: the label heads the screen"                 grep -q "▸ admin" <<<"$out"
-  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "dadmin.shop.example\nr\e" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
-  check "publish-to: custom domain saved from that screen"   is "$(vc domain_get shop-1/shop-1)" admin.shop.example
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "dadmin.shop.dev\nr\e" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  check "publish-to: custom domain saved from that screen"   is "$(vc domain_get shop-1/shop-1)" admin.shop.dev
   check "publish-to: the screen redraws with the domain"     grep -q "DNS pending" <<<"$out"
   check "publish-to: main website names the domain"          grep -q "web.app and admin" <<<"$out"
   vc domain_set shop-1/shop-1 ""
@@ -510,6 +510,17 @@ FAKE
   check "swap: backing out keeps the old link"               is "$(vc folder_of shop-1/shop-1)" "$p"
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "ty" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p2" 2>&1 || true)"
   check "swap: y goes on and relinks the folder"             is "$(vc proj_get "$p2" id)" shop-1/shop-1
+  cat > "$fbin2/firebase" <<'FAKE'
+#!/bin/sh
+case "$1" in login:list) echo "Logged in as a@x.com" ;; --version) echo 15.0.0 ;; hosting:sites:list) echo '{"status":"success","result":{"sites":[{"name":"projects/shop-1/sites/shop-1"}]}}' ;; hosting:sites:create) echo "created $2" ;; esac
+FAKE
+  p3="$(mktemp -d)/ShopAdmin"; mkdir -p "$p3"; cp "$p/package.json" "$p3/"
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "s\n\n\e" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p3" 2>&1 || true)"
+  check "new site here: suggested from the folder and project" grep -q "create  admin-shop-1.web.app  in shop-1" <<<"$out"
+  check "new site here: created in the same project"         grep -q "created site “admin-shop-1”" <<<"$out"
+  check "new site here: the screen redraws as the new site"  grep -q "▸ admin-shop-1" <<<"$out"
+  check "new site here: cached under the project"            grep -q "shop-1/admin-shop-1" <<<"$(vc landing)"
+  check "new site here: not offered on Vercel"               not grep -q "new site here" <<<"$(bash -c 'source ./ship-site/ship-site; DRY=yes; PROD=""; printf "\e" | deploy me prj_9 shop "$1" vercel' _ "$p" 2>&1)"
   vc proj_set "$p2" id ""
   check "done: back to projects returns"                     bash -c 'source ./ship-site/ship-site; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp'
   out="$(bash -c 'source ./ship-site/ship-site; URL=https://x; printf "lmine\np" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
@@ -520,10 +531,14 @@ FAKE
   out="$(bash -c 'source ./ship-site/ship-site; DRY=no; printf "Admin.SukunGarden.com\nr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' 2>&1)"
   check "domain: remembered without connecting"              is "$(vc domain_get shop-1/shop-1)" admin.sukungarden.com
   check "domain: says it is a reminder"                      grep -q "remembered admin.sukungarden.com" <<<"$out"
-  out="$(bash -c 'source ./ship-site/ship-site; DRY=no; printf "shop.vercel.example\n" | custom_domain vercel me prj_9 shop' 2>&1)"
+  out="$(bash -c 'source ./ship-site/ship-site; DRY=no; printf "shop.vercel.dev\n" | custom_domain vercel me prj_9 shop' 2>&1)"
   check "domain: vercel keeps a reminder and points at vercel.com" grep -q "vercel.com › shop › Domains" <<<"$out"
-  check "domain: vercel reminder saved"                      is "$(vc domain_get prj_9)" shop.vercel.example
+  check "domain: vercel reminder saved"                      is "$(vc domain_get prj_9)" shop.vercel.dev
   check "domain: a bad one is refused"                       not bash -c 'source ./ship-site/ship-site; DRY=no; printf "not a domain\n" | custom_domain firebase a@x.com shop-1/shop-1 shop-1'
+  check "domain: a missing ending is questioned"             not bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nn" | custom_domain firebase a@x.com shop-1/shop-1 shop-1'
+  out="$(bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nn" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' 2>&1 || true)"
+  check "domain: the question names the missing .com"        grep -q "needs its .com" <<<"$out"
+  check "domain: y keeps an odd ending"                      bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nyr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' && [ "$(vc domain_get shop-1/shop-1)" = admin.sukungarden ]
   vc domain_set shop-1/shop-1 ""; vc domain_set prj_9 ""
   # cache: a young cache skips the refresh, a stale one runs it
   vc stamp; check "refresh fresh: young cache returns at once" bash -c "source ./ship-site/ship-site; refresh fresh; [ \"\$(vc age)\" -lt 5 ]"

@@ -349,6 +349,7 @@ confirm_y(){ # $1 question -> true only on y; used where one stray key must not 
 }
 ACTIONS=""
 IFS= read -r -d '' ACTIONS <<'ACTS' || true   # a heredoc, so option texts may hold quotes
+new site here|site.new|s
 new project here|-|
 new project|project.new|n
 label a project|project.label|l
@@ -761,6 +762,24 @@ new_project(){ # $1 host  $2 account (both optional: given from a group's own ro
   printf 'vercel\t%s\t%s' "$acct" "$r"
 }
 
+new_site_here(){ # $1 account $2 Firebase project $3 folder -> creates one more <name>.web.app site in that project; echoes its name
+  local acct="$1" proj="$2" n r g
+  need_firebase
+  g="$(guess_label "$3")"; n="$(slugify "${g:+$g-}$proj")"
+  step "New site in ${proj}  ${D}${acct}${R}"
+  sub "its own <name>.web.app in the same project — admin-${proj}, website-${proj}"
+  while :; do
+    n="$(confirm_name "Site name (becomes <name>.web.app)" "$n" "NAME.web.app  in ${proj}")" || return 1
+    [ "$DRY" = yes ] && { ok "would create site “${n}” in ${proj}  ${D}(dry run, not created)${R}"; return 1; }
+    cmd "firebase hosting:sites:create $n --project $proj --account $acct"
+    r="$(firebase hosting:sites:create "$n" --project "$proj" --account "$acct" --non-interactive 2>&1)" && break
+    warn "$(printf '%s' "$r" | grep -i error | tail -1 | sed 's/^Error: //')"
+  done
+  ok "created site “${n}” → ${n}.web.app"
+  vc cache_add "$acct" "$proj/$n" "$n" "$n.web.app" firebase "$proj"
+  printf '%s' "$n"
+}
+
 firebaserc_project(){ # $1 folder -> the default Firebase project its .firebaserc names, if any
   [ -f "$1/.firebaserc" ] && py -c 'import json,sys;print((json.load(open(sys.argv[1])).get("projects") or {}).get("default",""))' "$1/.firebaserc" 2>/dev/null
 }
@@ -998,10 +1017,15 @@ publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
 custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  $4 name -> saves the domain; on Firebase connects it and prints the DNS records to add
   local host="$1" acct="$2" proj="${3%%/*}" site="${3#*/}" dom tok out t h v text=""
   step "Custom domain for ${4}  ${D}$([ "$host" = firebase ] && echo "${site}.web.app" || echo "${4}.vercel.app")${R}"
-  sub "a domain you own, or a subdomain of one: sukungarden.com, admin.sukungarden.com"
+  sub "a domain you own, or a subdomain of one — example.com, admin.example.com, with its ending"
   dom="$(ask "Domain" "$(vc domain_get "$3")")"; [ -n "$dom" ] || return 1
   dom="$(printf '%s' "$dom" | tr 'A-Z' 'a-z' | sed 's|^https\{0,1\}://||; s|/.*||; s/^www\.//')"
-  echo "$dom" | grep -Eq '^([a-z0-9-]+\.)+[a-z]{2,}$' || { warn "“${dom}” does not look like a domain"; return 1; }
+  echo "$dom" | grep -Eq '^([a-z0-9-]+\.)+[a-z]{2,}$' || { warn "“${dom}” is not a domain — something like example.com or admin.example.com"; return 1; }
+  case ".${dom##*.}." in
+    .com.|.net.|.org.|.io.|.app.|.dev.|.co.|.uk.|.pk.|.in.|.me.|.ai.|.xyz.|.site.|.online.|.store.|.tech.|.info.|.biz.|.us.|.ca.|.de.|.fr.|.au.|.nz.|.eu.|.pro.|.cloud.|.shop.|.ae.|.sa.) ;;
+    *) warn "“${dom}” ends in .${dom##*.}, which is not a usual ending — admin.sukungarden needs its .com"
+       confirm_y "Use “${dom}” as typed?" || return 1 ;;
+  esac
   [ "$DRY" = yes ] && { ok "would remember ${dom} for ${4}$([ "$host" = firebase ] && echo ", connect it and show the DNS records to add")  ${D}(dry run, nothing saved)${R}"; return 0; }
   vc domain_set "$3" "$dom"; ok "remembered ${dom} for ${4} — it shows on its row$([ "$host" = firebase ] && echo ' as DNS pending until it answers')"
   [ "$host" = firebase ] || { sub "add it on vercel.com › ${4} › Domains, which shows the records to add"; return 0; }
@@ -1014,15 +1038,18 @@ custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  
   cmd "firebasehosting.googleapis.com … sites/${site}/customDomains/${dom}"
   out="$(vc fb_domain "$tok" "$proj" "$site" "$dom")" || { warn "${out#ERR	}"; return 1; }
   if [ "${out%%	*}" = live ]; then ok "${dom} is connected already — no records to add"; vc fb_refresh 2>/dev/null; return 0; fi
-  step "Add these records at your domain’s DNS (registrar)"
-  printf "     ${D}%-6s %-44s %s${R}\n" type host value >&2
+  # the registrar wants the host without the domain: admin for admin.example.com, @ for example.com itself
+  local base; base="$(printf '%s' "$dom" | awk -F. '{print $(NF-1)"."$NF}')"
+  step "Add these records at your registrar (Namecheap: Advanced DNS)  ${D}for ${base}${R}"
+  printf "     ${D}%-6s %-34s %s${R}\n" type host value >&2
   while IFS=$'\t' read -r t h v; do
     [ -n "$t" ] || continue
-    printf "     ${B}%-6s${R} %-44s ${A}%s${R}\n" "$t" "$h" "$v" >&2
+    case "$h" in "$base") h="@" ;; *".$base") h="${h%.$base}" ;; esac
+    printf "     ${B}%-6s${R} %-34s ${A}%s${R}\n" "$t" "$h" "$v" >&2
     text="${text}${t}  ${h}  ${v}
 "
   done <<<"$out"
-  printf '%s' "$text" | clip 2>/dev/null && sub "copied"
+  printf '%s' "$text" | clip 2>/dev/null && sub "copied — host is the part before ${base}; @ is ${base} itself"
   sub "Firebase checks them on its own; the site answers on ${dom} once they are live, usually within an hour, sometimes a day"
   sub "https://console.firebase.google.com/project/${proj}/hosting/sites/${site}"
   sub "once it answers, the list shows ${dom} in place of ${site}.web.app (refresh)"
@@ -1031,7 +1058,7 @@ custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  
 
 # ── deploy ────────────────────────────────────────────────────────────────
 deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 folder  $5 host (vercel|firebase)
-  local acct="$1" pid="$2" pname="$3" root="$4" host="${5:-vercel}" pm token team stage url flag domain log label also
+  local acct="$1" pid="$2" pname="$3" root="$4" host="${5:-vercel}" pm token team stage url flag domain log label also idx site
   [ -f "$root/package.json" ] || die "no package.json in $root"
   pm="$(detect_pm "$root")"
   [ "$DRY" = yes ] || { [ "$host" = firebase ] && need_firebase || need_vercel; }   # before any question or write
@@ -1050,17 +1077,22 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
                                                                         || row "domain" "${domain}  ${D}also ${pid#*/}.$([ "$host" = firebase ] && echo web.app || echo vercel.app), which stays as is${R}"
     else row "domain" "${D}none yet${R}"; fi
     [ -n "$PROD" ] && break
-    MENU_ITEMS=("main website" "test version" "custom domain" "← back")
+    MENU_ITEMS=("main website" "test version")
     if [ "$host" = firebase ]; then MENU_NOTES=("   ${D}updates ${pid#*/}.web.app$([ -n "$domain" ] && echo " and ${domain} once live")${R}" "   ${D}a preview URL for 7 days, the main website untouched${R}")
     else MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}"); fi
+    [ "$host" = firebase ] && { MENU_ITEMS+=("new site here"); MENU_NOTES+=("   ${D}another <name>.web.app in ${pid%%/*}; this folder publishes there instead${R}"); }
+    MENU_ITEMS+=("custom domain" "← back")
     MENU_NOTES+=("   ${D}${domain:-your own domain or subdomain}, saved as a reminder; connect it now or later${R}" "   ${D}another project or site${R}")
-    case "$(menu_pick "Publish to" 0)" in
+    idx="$(menu_pick "Publish to" 0)"
+    [ "$host" = firebase ] || [ "$idx" -lt 2 ] || idx=$((idx + 1))   # no "new site here" on Vercel: the rows after it shift up by one
+    case "$idx" in
       0) PROD=yes
          # a single stray key must not replace the live site
          if picked_by_key && [ "$DRY" != yes ] && ! confirm_y "Publish to the main website?"; then warn "cancelled — nothing was published"; exit 0; fi
          break ;;
       1) PROD=no; break ;;
-      2) custom_domain "$host" "$acct" "$pid" "$pname" || true; continue ;;
+      2) if site="$(new_site_here "$acct" "${pid%%/*}" "$root")"; then pid="${pid%%/*}/$site"; pname="$site"; fi; continue ;;
+      3) custom_domain "$host" "$acct" "$pid" "$pname" || true; continue ;;
       *) return 1 ;;
     esac
   done
