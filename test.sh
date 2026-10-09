@@ -513,12 +513,14 @@ FAKE
 #!/bin/sh
 case "$1" in login:list) echo "Logged in as a@x.com" ;; --version) echo 15.0.0 ;; hosting:sites:list) echo '{"status":"success","result":{"sites":[{"name":"projects/shop-1/sites/shop-1"}]}}' ;; hosting:sites:create) echo "created $2" ;; esac
 FAKE
-  p3="$(mktemp -d)/ShopAdmin"; mkdir -p "$p3"; cp "$p/package.json" "$p3/"
+  p3="$(mktemp -d)/ShopAdmin"; mkdir -p "$p3/dist"; : > "$p3/dist/index.html"; cp "$p/package.json" "$p3/"
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "s\n\n\e" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p3" 2>&1 || true)"
   check "new site here: suggested from the folder and project" grep -q "create  admin-shop-1.web.app  in shop-1" <<<"$out"
   check "new site here: created in the same project"         grep -q "created site “admin-shop-1”" <<<"$out"
   check "new site here: the screen redraws as the new site"  grep -q "▸ admin-shop-1" <<<"$out"
   check "new site here: cached under the project"            grep -q "shop-1/admin-shop-1" <<<"$(vc landing)"
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase < <(printf "s\n\nmyp"); echo "done=$DONE_ID"' _ "$p3" 2>&1 || true)"
+  check "new site here: the done screen gets the new site"   grep -q "done=shop-1/admin-shop-1" <<<"$out"
   check "new site here: not offered on Vercel"               not grep -q "new site here" <<<"$(bash -c 'source ./ship-site/ship-site; DRY=yes; PROD=""; printf "\e" | deploy me prj_9 shop "$1" vercel' _ "$p" 2>&1)"
   vc proj_set "$p2" id ""
   check "done: back to projects returns"                     bash -c 'source ./ship-site/ship-site; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp'

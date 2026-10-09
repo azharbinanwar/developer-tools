@@ -1092,6 +1092,7 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
       *) return 1 ;;
     esac
   done
+  DONE_ID="$pid"; DONE_NAME="$pname"   # the done screen needs the site actually published to, which "new site here" may have changed
   # another folder already publishes here: say so before anything is built, and let the user back out
   domain="$(vc folder_of "$pid")"
   if [ -n "$domain" ] && [ "$domain" != "$root" ]; then
@@ -1147,7 +1148,7 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   URL="$url"; ALSO="$also"
 }
 
-URL=""; ALSO=""
+URL=""; ALSO=""; DONE_ID=""; DONE_NAME=""
 done_menu(){ # $1 host $2 account $3 project id $4 name $5 folder -> after a publish: the details to copy, then what next
   local host="$1" acct="$2" pid="$3" pname="$4" root="$5" l
   [ "$host" = firebase ] && row "console" "https://console.firebase.google.com/project/${pid%%/*}/hosting/sites/${pid#*/}" \
@@ -1155,13 +1156,12 @@ done_menu(){ # $1 host $2 account $3 project id $4 name $5 folder -> after a pub
   while :; do
     l="$(vc label_get "$pid")"
     MENU_ITEMS=("open the link in the browser" "label this project" "custom domain" "back to projects" "quit")
-    MENU_NOTES=("  ${D}${URL}${R}" "  ${D}${l:-none yet} — admin, landing, the domain it serves${R}"
+    MENU_NOTES=("  ${D}${URL}${R}" "  ${D}${l:-$pname} — admin, landing, the domain it serves; change it any time${R}"
                 "  ${D}$(vc domain_get "$pid")${R}" "" "")
-    [ -n "$l" ] || MENU_NOTES[1]="  ${D}none yet — admin, landing, the domain it serves${R}"
     printf "\n" >&2
     case "$(menu_pick "Next" 3)" in
       0) open_it "$URL" || warn "could not open a browser — the link is copied" ;;
-      1) vc label_set "$pid" "$(ask "Label for ${pname} (blank removes it)" "$(guess_label "$root")")"; ok "saved" ;;
+      1) vc label_set "$pid" "$(ask "Label for ${pname}" "${l:-$pname}")"; ok "saved" ;;
       2) custom_domain "$host" "$acct" "$pid" "$pname" ;;
       3) return 0 ;;
       *) printf "\n" >&2; exit 0 ;;
@@ -1266,7 +1266,7 @@ main(){
          else IFS=$'\x1f' read -r _ h a <<<"${kind[$idx]}"; r="$(new_project "$h" "$a")" || continue; fi
          folder="$(choose_folder "")" || continue
          IFS=$'\t' read -r h a id nm <<<"$r"
-         deploy "$a" "$id" "$nm" "$folder" "$h" || continue; done_menu "$h" "$a" "$id" "$nm" "$folder"; continue ;;
+         deploy "$a" "$id" "$nm" "$folder" "$h" || continue; done_menu "$h" "$a" "$DONE_ID" "$DONE_NAME" "$folder"; continue ;;
       label|domain)
          [ ${#rows[@]} -gt 0 ] || { warn "no projects yet"; continue; }
          local k; MENU_ITEMS=(); MENU_NOTES=()
@@ -1290,7 +1290,7 @@ main(){
     idx="${kind[$idx]#row:}"
     IFS=$'\x1f' read -r a id nm f h <<<"${rows[$idx]}"
     folder="$(choose_folder "$f")" || continue
-    deploy "$a" "$id" "$nm" "$folder" "$h" || continue; done_menu "$h" "$a" "$id" "$nm" "$folder"
+    deploy "$a" "$id" "$nm" "$folder" "$h" || continue; done_menu "$h" "$a" "$DONE_ID" "$DONE_NAME" "$folder"
   done
 }
 
