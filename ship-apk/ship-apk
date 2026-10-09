@@ -4,7 +4,7 @@
 # One file. Settings and send logs live in ~/.config/ship-apk, never in
 # your project repos, so no email address or API key can ever be committed.
 #
-# Needs macOS built-ins (curl, python3, pbcopy) plus flutter or fvm to build.
+# Needs curl and python3 (built in on macOS and Linux) plus flutter or fvm to build; works on macOS, Linux and Windows (Git Bash or WSL).
 # qrencode is used if present and skipped if not.
 #
 # License: MIT.
@@ -16,7 +16,41 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="1.1.0"
+VERSION="2.0.0-beta.1"
+# ── platform ──────────────────────────────────────────────────────────────
+# macOS, Linux and Windows (Git Bash or WSL) differ in a few commands; everything platform-specific goes through these.
+case "$(uname -s 2>/dev/null)" in Darwin) OS=mac ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS=linux ;; esac
+PY=python3; command -v python3 >/dev/null 2>&1 || PY=python
+py(){ "$PY" "$@"; }
+clip(){ # stdin -> the clipboard, whichever tool this machine has; false when there is none
+  if command -v pbcopy >/dev/null 2>&1; then pbcopy
+  elif command -v wl-copy >/dev/null 2>&1; then wl-copy
+  elif command -v xclip >/dev/null 2>&1; then xclip -selection clipboard
+  elif command -v xsel >/dev/null 2>&1; then xsel --clipboard --input
+  elif command -v clip.exe >/dev/null 2>&1; then clip.exe
+  else cat >/dev/null; return 1; fi
+}
+open_it(){ # $1 file, folder or url -> opens it with the desktop; false when nothing can
+  if [ "$OS" = mac ]; then open "$1"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1
+  elif command -v wslview >/dev/null 2>&1; then wslview "$1"
+  elif command -v cmd.exe >/dev/null 2>&1; then cmd.exe /c start "" "$1" >/dev/null 2>&1
+  else return 1; fi
+}
+edit_file(){ # $1 file -> opens it in $VISUAL/$EDITOR, else the desktop's text editor; waits only for a terminal editor
+  if [ -n "${VISUAL:-${EDITOR:-}}" ]; then
+    if [ -t 2 ]; then ${VISUAL:-$EDITOR} "$1" </dev/tty >/dev/tty; else ${VISUAL:-$EDITOR} "$1" >&2; fi; return 0
+  fi
+  if [ "$OS" = mac ]; then open -t "$1"; else open_it "$1"; fi || return 1
+  printf "     ${A}Opened in your editor — save it, then press Enter here${R} ${A}›${R} " >&2; read -r _
+}
+fsize(){ stat -f %z "$1" 2>/dev/null || stat -c %s "$1"; }          # bytes
+fmtime(){ stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }         # seconds since the epoch
+fmode(){ stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }         # permission bits, e.g. 600
+fdate(){ date -r "$1" "$2" 2>/dev/null || date -d "@$1" "$2"; }     # $1 epoch seconds  $2 format
+sed_i(){ if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi; }
+tmpf(){ mktemp "${TMPDIR:-/tmp}/${1:-tmp}.XXXXXX"; }              # a temp file; portable, no -t
+tmpd(){ mktemp -d "${TMPDIR:-/tmp}/${1:-tmp}.XXXXXX"; }           # a temp folder
 RULE="────────────────────────────────────────────"
 banner(){ printf "\n  ${A}${B}◆  %s${R}  ${D}%s${R}\n" "$1" "${2:-}" >&2; }
 step(){ printf "\n  ${A}${B}▸${R} ${B}%s${R}\n" "$1" >&2; }
@@ -38,7 +72,7 @@ MAX_MB=100          # appho.st free tier rejects builds bigger than this
 # ── config ────────────────────────────────────────────────────────────────
 # One python block owns the file; bash only ever asks it for lines.
 cfg(){
-python3 - "$CONFIG" "$@" <<'PY'
+py - "$CONFIG" "$@" <<'PY'
 import json, os, sys
 
 path, op = sys.argv[1], sys.argv[2]
@@ -82,7 +116,8 @@ elif op == "proj_set":   proj(a[0])[a[1]] = a[2]; save()
 elif op == "proj_del":   d["projects"].pop(a[0], None); save()
 elif op == "people":          # key [to|bcc]
     for r in proj(a[0]).get(a[1] if len(a) > 1 else "to", []):
-        print("%s\t%s" % (r.get("name", ""), r.get("email", "")))
+        # never an empty name: bash reads these tab-separated, and an empty first field would swallow the address
+        print("%s\t%s" % (r.get("name") or r.get("email", "").split("@")[0], r.get("email", "")))
 elif op == "person_add":      # key name email [to|bcc]
     p = proj(a[0]); f = a[3] if len(a) > 3 else "to"
     p[f] = [r for r in p.get(f, []) if r.get("email") != a[2]]
@@ -101,6 +136,119 @@ PY
 }
 
 # ── menus and prompts ─────────────────────────────────────────────────────
+term_size(){ # -> "rows cols" of the real terminal; works inside $( ), where tput only sees a pipe and guesses 24x80
+  local s; s="$({ stty size </dev/tty; } 2>/dev/null)"
+  [ -n "$s" ] && { printf '%s' "$s"; return; }
+  printf '%s %s' "$(tput lines 2>/dev/null || echo 24)" "$(tput cols 2>/dev/null || echo 80)"
+}
+# ── shortcut keys ─────────────────────────────────────────────────────────
+# Every option is matched by its text to an action with a default key (ACTIONS below). A key set in
+# ~/.config/developer-tools/keys.json, e.g. {"site.main": "w"}, wins over the default. Options without
+# an action, such as apps and projects, get 1–9 in screen order. Esc picks "← back"; q quits.
+KEYS_FILE="$HOME/.config/developer-tools/keys.json"
+PICK_FILE="$HOME/.config/developer-tools/.lastpick"   # how the last menu pick was made: key or enter; one file, overwritten
+act_of(){ # $1 option text -> "action key" from ACTIONS, or nothing
+  local t p a k
+  t="$(printf '%s' "$1" | sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b(B//g' | tr 'A-Z' 'a-z' \
+       | sed -e 's/^[[:space:]]*//' -e 's/^← *//' -e 's/^+ *//' -e 's/[[:space:]]*$//')"
+  while IFS='|' read -r p a k; do
+    [ -n "$p" ] || continue
+    case "$t" in "$p"|"$p "*) printf '%s %s' "$a" "$k"; return ;; esac
+  done <<<"$ACTIONS"
+}
+MK=(); MENU_NOKEY=""   # MENU_NOKEY: indexes of rows that are data (apps, projects, people) — they get 1–9, never an action key
+nokey_rows(){ # $1 count -> "0 1 … count-1", or nothing for 0 (seq would count down to -1)
+  local i out=""; for ((i=0;i<${1:-0};i++)); do out="$out$i "; done; printf '%s' "${out% }"
+}
+menu_keys(){ # -> MK: the shortcut shown for each MENU_ITEMS entry (a letter, 1–9, esc, or nothing)
+  local i ak a k o ov used=" j k q / ? " d=1 acts=() defs=() all=" " nokey=" $MENU_NOKEY "
+  MK=(); ov=""; MENU_NOKEY=""
+  [ -f "$KEYS_FILE" ] && ov="$(py -c '
+import json, sys
+for a, k in json.load(open(sys.argv[1])).items(): print(a + "=" + str(k)[:1].lower())' "$KEYS_FILE" 2>/dev/null)"
+  # first pass: every option's action and default key, so a key from keys.json can never steal another option's default
+  for ((i=0;i<${#MENU_ITEMS[@]};i++)); do
+    a=""; k=""
+    case "$nokey" in *" $i "*) ak="" ;; *) [ "${MENU_ITEMS[$i]:0:1}" != $'\x01' ] && ak="$(act_of "${MENU_ITEMS[$i]}")" || ak="" ;; esac
+    [ -n "$ak" ] && { a="${ak%% *}"; k="${ak#* }"; }
+    acts+=("$a"); defs+=("$k"); [ -n "$k" ] && [ "$k" != esc ] && all="$all$k "
+  done
+  for ((i=0;i<${#MENU_ITEMS[@]};i++)); do
+    a="${acts[$i]}"; k="${defs[$i]}"
+    if [ -n "$a" ] && [ "$a" != "-" ] && [ "$k" != esc ]; then
+      o="$(printf '%s\n' "$ov" | grep -F "$a=" | head -1 | cut -d= -f2 || true)"
+      if [ -n "$o" ] && [ "$o" != "$k" ]; then
+        case "$used$all" in *" $o "*) warn "keys.json: “${o}” for ${a} is taken on this screen — keeping “${k}”"; o="" ;; esac
+      fi
+      [ -n "$o" ] && k="$o"
+      case "$used" in *" $k "*) k="" ;; esac
+    fi
+    [ "$a" = "-" ] && k=""
+    [ "$a" = quit ] && k=q          # q quits on every screen anyway; the quit option just shows it
+    if [ -z "$a" ] && [ "${MENU_ITEMS[$i]:0:1}" != $'\x01' ] && [ "$d" -le 9 ]; then k="$d"; d=$((d + 1)); fi
+    [ -n "$k" ] && [ "$k" != esc ] && used="$used$k "
+    MK+=("$k")
+  done
+  mkdir -p "${PICK_FILE%/*}" 2>/dev/null; printf 'enter' > "$PICK_FILE" 2>/dev/null
+}
+pfx(){ local k="${MK[$1]:-}"; [ -n "$k" ] && printf '%-6s' "[$k]" || printf '      '; }
+key_hit(){ # $1 key pressed -> echoes the index of the option with that shortcut
+  local i; [ -n "$1" ] || return 1
+  for ((i=0;i<${#MK[@]};i++)); do [ "${MK[$i]}" = "$1" ] && { printf 'key' > "$PICK_FILE" 2>/dev/null; printf '%s' "$i"; return 0; }; done
+  return 1
+}
+back_hit(){ local i; for ((i=0;i<${#MK[@]};i++)); do [ "${MK[$i]}" = esc ] && { printf '%s' "$i"; return 0; }; done; return 1; }
+picked_by_key(){ [ "$(cat "$PICK_FILE" 2>/dev/null)" = key ]; }
+confirm_y(){ # $1 question -> true only on y; used where one stray key must not do something hard to undo
+  local c; printf "     ${Y}%s${R} ${A}y to go, any other key cancels ›${R} " "$1" >&2
+  IFS= read -rsn1 c; printf '%s\n' "$c" >&2
+  [ "$c" = y ] || [ "$c" = Y ]
+}
+ACTIONS=""
+IFS= read -r -d '' ACTIONS <<'ACTS' || true   # a heredoc, so option texts may hold quotes
+add this app|app.add|a
+add app|app.add|a
+edit an app|app.edit|e
+mailbox|mailbox|m
+quit|quit|q
+ship as|version.keep|s
+bump|version.bump|b
+build a fresh one|build.fresh|f
+use the last build|build.last|l
+back to apps|apps|a
+send the link|mail.send|s
+skip mail this time|mail.skip|x
+change to, cc, bcc or subject|mail.change|c
+set up mailbox|mail.setup_box|m
+set up this app's email|mail.setup_app|e
+use these|notes.use|u
+write my own|notes.write|w
+no notes|notes.none|x
+open the apk folder|done.folder|o
+open the link in the browser|done.link|l
+retry the upload|upload.retry|r
+to|edit.to|t
+cc|edit.cc|c
+bcc|edit.bcc|b
+subject|edit.subject|s
+app name|edit.name|a
+app id|edit.id|i
+folder|edit.folder|f
+credentials|edit.credentials|r
+remove this app|edit.remove|d
+address|box.address|a
+password|box.password|p
+smtp host|box.host|h
+port|box.port|o
+from name|box.from|f
+send a test to myself|box.test|t
+edit the mail template|box.template|e
+add to|people.add|a
+rename|person.rename|r
+change address|person.address|c
+remove|person.remove|d
+back|back|esc
+ACTS
 fit(){ # $1 text (may carry colour codes)  $2 width -> the text as is, or cut with … when it would wrap
   local plain
   plain="$(printf '%s' "$1" | sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b(B//g')"
@@ -115,25 +263,31 @@ menu_pick(){ # $1 title  $2 skip index (-1 for none)  $3 index to start on -> ec
   printf '\033[?7l' >&2   # no wrapping while the menu is up: a long row is cut, not wrapped, so the redraw stays aligned
   [ -n "$saved" ] && { stty -echo -icanon 2>/dev/null || true
                        trap 'stty "$saved" 2>/dev/null; printf "\033[?7h" >&2; exit 130' INT; }
-  printf "     ${D}%s${R}  ${D}· ↑↓ move · Enter picks%s${R}\n" \
-    "$title" "$([ "$skip" -ge 0 ] && echo " · q skips")" >&2
+  menu_keys
+  printf "     ${D}%s${R}  ${D}· ↑↓ move · Enter or a [key] picks%s${R}\n" \
+    "$title" "$([ "$skip" -ge 0 ] && echo " · Esc or q skips")" >&2
   for ((i=0;i<n;i++)); do printf '\n' >&2; done
   # rows are cut to the window width up front: a wrapped row would throw off the cursor-up redraw
-  local w rows=(); w=$(( $(tput cols 2>/dev/null || echo 80) - 8 ))
-  for ((i=0;i<n;i++)); do rows+=("$(fit "${MENU_ITEMS[$i]}${MENU_NOTES[$i]:-}" "$w")"); done
+  local w rows=() hit; w=$(( $(term_size | cut -d" " -f2) - 8 ))
+  for ((i=0;i<n;i++)); do rows+=("$(fit "$(pfx "$i")${MENU_ITEMS[$i]}${MENU_NOTES[$i]:-}" "$w")"); done
   while :; do
     printf "\033[%dA" "$n" >&2
     for i in $(seq 0 $((n-1))); do
       if [ "$i" -eq "$sel" ]; then printf "\r\033[K     ${A}❯ %s${R}\n" "${rows[$i]}" >&2
       else                         printf "\r\033[K       ${D}%s${R}\n" "${rows[$i]}" >&2; fi
     done
-    IFS= read -rsn1 k 2>/dev/null || break
+    IFS= read -rsn1 k 2>/dev/null || { [ "$skip" -ge 0 ] && sel="$skip" || { hit="$(back_hit)" && sel=$hit; }; break; }   # end of input: back out
+    hit="$(key_hit "$k")" && { sel=$hit; break; }
     case "$k" in
       '')      break ;;
-      $'\e')   IFS= read -rsn2 rest 2>/dev/null || rest=""  # bash 3.2 has no sub-second read -t
+      $'\e')   IFS= read -rsn2 -t 1 rest 2>/dev/null || rest=""   # nothing after Esc within a second: plain Esc
+               if [ -z "$rest" ]; then
+                 [ "$skip" -ge 0 ] && { sel="$skip"; break; }
+                 hit="$(back_hit)" && { sel=$hit; break; }
+               fi
                case "$rest" in "[A") sel=$(((sel-1+n)%n)) ;; "[B") sel=$(((sel+1)%n)) ;; esac ;;
-      k|K|w|W) sel=$(((sel-1+n)%n)) ;;
-      j|J|s|S) sel=$(((sel+1)%n)) ;;
+      k|K)     sel=$(((sel-1+n)%n)) ;;
+      j|J)     sel=$(((sel+1)%n)) ;;
       q|Q)     [ "$skip" -ge 0 ] && { sel="$skip"; break; } ;;
     esac
   done
@@ -264,7 +418,7 @@ head_sha(){ [ -d "$1/.git" ] && ( cd "$1" && git rev-parse HEAD 2>/dev/null ); }
 # ── mail ──────────────────────────────────────────────────────────────────
 # One ordinary email: To is in the headers, BCC only goes to the envelope.
 send_mail(){ # $1 project key  $2 app label  $3 version  $4 link  $5 notes  $6 dry("yes" prints instead of sending)
-python3 - "$CONFIG" "$@" <<'PY'
+py - "$CONFIG" "$@" <<'PY'
 import json, smtplib, ssl, sys
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -335,7 +489,7 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
   UPLOAD_LINK=""
   user_id="$(cfg proj_get "$key" user_id)"; apikey="$(cfg proj_get "$key" key)"; app_id="$(cfg proj_get "$key" app_id)"
 
-  bytes="$(stat -f '%z' "$apk")"
+  bytes="$(fsize "$apk")"
   if [ "$bytes" -gt $((MAX_MB * 1048576)) ]; then
     warn "$((bytes / 1048576)) MB is over the ${MAX_MB} MB free-tier limit — appho.st will probably reject it"
     [ "$(ask_yn "Try the upload anyway" true)" = true ] || return 1
@@ -349,7 +503,7 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
   printf "\n" >&2
 
   # no -f: appho.st reports problems as a 4xx with the reason in the body.
-  err="$(mktemp -t shipapk)"
+  err="$(tmpf shipapk)"
   url="$(curl -sSG "$API/get_upload_url" \
     --data-urlencode "user_id=$user_id" --data-urlencode "app_id=$app_id" \
     --data-urlencode "key=$apikey" --data-urlencode "platform=android" \
@@ -374,7 +528,7 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
   for try in 1 2 3 4 5; do
     link="$(curl -sG "$API/get_current_version/" \
       --data-urlencode "u=$user_id" --data-urlencode "a=$app_id" --data-urlencode "platform=android" \
-      | python3 -c 'import json,sys;print(json.load(sys.stdin).get("url",""))' 2>/dev/null)"
+      | py -c 'import json,sys;print(json.load(sys.stdin).get("url",""))' 2>/dev/null)"
     [ -n "$link" ] && break
     sleep 2
   done
@@ -384,7 +538,7 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
   row "version" "$version"
   row "when" "$(date '+%d %b %Y, %H:%M')"
   if [ -n "$link" ]; then
-    printf %s "$link" | pbcopy 2>/dev/null && copied="  ${D}copied${R}"
+    printf %s "$link" | clip 2>/dev/null && copied="  ${D}copied${R}"
     row "link" "${B}${A}${link}${R}$copied"
     have qrencode && { printf "\n" >&2; qrencode -t ANSIUTF8 -m 2 "$link" >&2; }
     UPLOAD_LINK="$link"
@@ -418,14 +572,9 @@ pick_notes(){ # $1 root  $2 key -> echoes the "What changed" text for the mail, 
   case "${MENU_ITEMS[$(menu_pick "Notes" -1 0)]}" in
     "use these") printf '%s' "$git" ;;
     "no notes")  ;;
-    *) f="$(mktemp -t shipapk-notes).md"
+    *) f="$(tmpf shipapk-notes).md"
        { printf '%s\n' "$git"; printf '\n# Write what changed. Lines starting with # are dropped. Save and close to continue.\n'; } > "$f"
-       if [ -n "${VISUAL:-${EDITOR:-}}" ]; then
-         if [ -t 2 ]; then ${VISUAL:-$EDITOR} "$f" </dev/tty >/dev/tty; else ${VISUAL:-$EDITOR} "$f" >&2; fi
-       else
-         open -t "$f" 2>/dev/null || warn "open $f yourself"
-         printf "     ${A}Opened in TextEdit — save it (⌘S), then press Enter here${R} ${A}›${R} " >&2; read -r _
-       fi
+       edit_file "$f" || warn "open $f yourself, save it, then press Enter"
        git="$(grep -v '^#' "$f" | awk '
          /^[[:space:]]*[•●▪–]+[[:space:]]*$/ { pre = "- "; next }
          /^[[:space:]]*[◦○]+[[:space:]]*$/   { pre = "  - "; next }
@@ -467,13 +616,13 @@ version_guard(){ # $1 key  $2 root  $3 version -> shows the version, bumps only 
   done
   [ "$nv" = "$v" ] && { printf '%s' "$v"; return; }
   if [ "$DRY" = yes ]; then row "pubspec" "would become version: ${D}$v${R} → ${B}$nv${R}  ${D}(dry run, not written)${R}"; printf '%s' "$nv"; return; fi
-  sed -i '' "s/^version:.*/version: $nv/" "$root/pubspec.yaml" || { warn "could not write pubspec.yaml"; printf '%s' "$v"; return; }
+  sed_i "s/^version:.*/version: $nv/" "$root/pubspec.yaml" || { warn "could not write pubspec.yaml"; printf '%s' "$v"; return; }
   row "pubspec" "version: ${D}$v${R} → ${B}$nv${R}"
   printf '%s' "$nv"
 }
 
 smtp_login_check(){ # logs in to the mailbox and out again, sends nothing -> "OK" or "FAIL<TAB>reason"
-python3 - "$CONFIG" <<'PY2'
+py - "$CONFIG" <<'PY2'
 import json, smtplib, ssl, sys
 s = json.load(open(sys.argv[1]))["smtp"]
 port = int(s.get("port") or 465)
@@ -520,7 +669,7 @@ dry_ship(){ # $1 key $2 root $3 name $4 version $5 fresh $6 last apk $7 want_mai
   while :; do
     idx="$(menu_pick "What next" $(( ${#MENU_ITEMS[@]} - 1 )) $(( ${#MENU_ITEMS[@]} - 2 )))"
     case "${MENU_ITEMS[$idx]}" in
-      "open the APK folder") open "$(dirname "$apk")" 2>/dev/null ;;
+      "open the APK folder") open_it "$(dirname "$apk")" ;;
       "back to apps") return 0 ;;
       quit) return 1 ;;
     esac
@@ -551,7 +700,7 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
   MENU_ITEMS=("build a fresh one"); MENU_NOTES=("  ${D}$(flutter_cmd "$root") build apk --release${R}")
   if [ -n "$apk" ]; then
     MENU_ITEMS+=("use the last build")
-    MENU_NOTES+=("  ${D}$(date -r "$(stat -f '%m' "$apk")" '+%d %b %H:%M')  $(( $(stat -f '%z' "$apk") / 1048576 )) MB${R}")
+    MENU_NOTES+=("  ${D}$(fdate "$(fmtime "$apk")" '+%d %b %H:%M')  $(( $(fsize "$apk") / 1048576 )) MB${R}")
   fi
   MENU_ITEMS+=("← back to apps"); MENU_NOTES+=("")
   step "Build"
@@ -578,7 +727,9 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
       MENU_NOTES=("  ${D}To $(cfg people "$key" to | cut -f2 | tr '\n' ' ')$(cfg people "$key" cc | cut -f2 | tr '\n' ' ' | sed 's/^./· CC &/')$(cfg people "$key" bcc | cut -f2 | tr '\n' ' ' | sed 's/^./· BCC &/')${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}" "")
       [ "$want_mail" = yes ] && idx=0 || idx=1
       case "$(menu_pick "Mail" 1 "$idx")" in
-        0) want_mail=yes; break ;;
+        0) # a single stray key must not mail the testers
+           if picked_by_key && [ "$DRY" != yes ] && ! confirm_y "Mail the link to $(recipients "$key") after the upload?"; then continue; fi
+           want_mail=yes; break ;;
         2) setup_app_mail "$key" "$name"; continue ;;
       esac
     fi
@@ -623,8 +774,8 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
     MENU_NOTES=("  ${D}$(sed "s|^$HOME|~|" <<<"$apkdir")${R}" "  ${D}${UPLOAD_LINK}${R}" "" "")
     step "Done"
     case "$(menu_pick "What next" 3 "$idx")" in
-      0) open "$apkdir" 2>/dev/null || warn "open $apkdir yourself"; idx=2 ;;
-      1) open "$UPLOAD_LINK" 2>/dev/null || warn "open $UPLOAD_LINK yourself"; idx=2 ;;
+      0) open_it "$apkdir" || warn "open $apkdir yourself"; idx=2 ;;
+      1) open_it "$UPLOAD_LINK" || warn "open $UPLOAD_LINK yourself"; idx=2 ;;
       2) return 0 ;;
       3) return 1 ;;
     esac
@@ -693,7 +844,8 @@ people_menu(){ # $1 project key  $2 to | bcc
     MENU_ITEMS+=("← back");         MENU_NOTES+=("")
     step "$label for “${key}”"
     case "$list" in to) sub "who the email is addressed to" ;; cc) sub "copied openly — everyone on the email sees these" ;; *) sub "hidden copy — nobody on the email can see these" ;; esac
-    idx="$(menu_pick "Who" $(( ${#MENU_ITEMS[@]} - 1 )) 0)"
+    MENU_NOKEY="$(nokey_rows "${#mails[@]}")"
+    idx="$(menu_pick "Who" $(( ${#MENU_ITEMS[@]} - 1 )) 0)"; MENU_NOKEY=""
     [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 1 )) ] && return
     if [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 2 )) ]; then
       n="$(ask "Their name" "")"; e="$(ask "Their address" "")"
@@ -786,7 +938,7 @@ smtp_menu(){
       3) cfg smtp_set port      "$(ask "Port" "$(cfg smtp_get port)")" ;;
       4) cfg smtp_set from_name "$(ask "From name" "$(cfg smtp_get from_name)")" ;;
       5) smtp_test ;;
-      6) open -t "$CONFIG" 2>/dev/null || warn "open $CONFIG yourself" ;;
+      6) edit_file "$CONFIG" || warn "open $CONFIG yourself" ;;
       7) return ;;
     esac
   done
@@ -866,14 +1018,16 @@ main(){
                  "  ${D}$([ "$(cfg smtp_ready)" = yes ] && cfg smtp_get user || echo 'not set up yet') · template${R}" "")
     step "Apps"
     [ "$napps" -gt 0 ] || sub "no apps yet — add one to get started"
-    idx="$(menu_pick "Pick an app to build and upload" $(( napps + 3 )) "$sel")"
+    MENU_NOKEY="$(nokey_rows "$napps")"
+    idx="$(menu_pick "Pick an app to build and upload" $(( napps + 3 )) "$sel")"; MENU_NOKEY=""   # set for that menu only; it ran in a subshell
     case $(( idx - napps )) in
       0) n="$(add_app "$([ "$HERE" -lt 0 ] && printf '%s' "$ROOT")")" || continue
          [ -n "$ROOT" ] && [ "$(cfg proj_get "$n" path)" = "$ROOT" ] && { ship "$n" "$ROOT" || exit 0; } ;;
       1) [ "$napps" -gt 0 ] || { warn "no apps yet"; continue; }
          load_projects "$ROOT"; MENU_ITEMS+=("← back"); MENU_NOTES+=("")
          step "Edit which app"
-         idx="$(menu_pick "App" "$napps" "$(( HERE < 0 ? 0 : HERE ))")"
+         MENU_NOKEY="$(nokey_rows "$napps")"
+         idx="$(menu_pick "App" "$napps" "$(( HERE < 0 ? 0 : HERE ))")"; MENU_NOKEY=""
          [ "$idx" -lt "$napps" ] && edit_app "${PROJ_KEYS[$idx]}" ;;
       2) [ "$(cfg smtp_ready)" = yes ] && smtp_menu || setup_mailbox ;;
       3) printf "\n" >&2; exit 0 ;;
