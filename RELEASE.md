@@ -53,9 +53,9 @@ The release workflow then: tests, checks the tag, publishes the GitHub release w
 ## 6. Try the beta yourself
 
 ```sh
-developer-tools beta && developer-tools install     # this Mac is now on the beta
-ship-site -v                                        # X.Y.Z-beta.1
-developer-tools stable && developer-tools install   # back, whenever
+bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tools/main/developer-tools) beta install   # this Mac is now on the beta
+ship-site -v                                                                                                          # X.Y.Z-beta.N
+developer-tools stable install                                                                                        # back, whenever
 ```
 
 ## 7. Verify

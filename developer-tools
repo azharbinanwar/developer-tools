@@ -253,13 +253,17 @@ main(){
       printf "\n  ${B}developer-tools${R} ${D}%s${R}\n\n" "$VERSION"
       printf "    ${A}developer-tools${R}              menu: run a tool, install, update or remove tools\n"
       printf "    ${A}developer-tools install${R}      install or update every tool, no questions\n"
-      printf "    ${A}developer-tools beta${R}         switch this Mac to the beta channel; ${A}developer-tools stable${R} switches back\n"
+      printf "    ${A}developer-tools beta install${R} switch this Mac to the beta channel and install the newest beta\n"
+      printf "    ${A}developer-tools stable install${R} back to the stable release\n"
       printf "    ${A}developer-tools <tool>${R}       run one tool (ship-apk, ship-site)\n\n"
       printf "  ${D}Tools install to %s and keep their settings in ~/.config/<tool>/${R}\n\n" "$BIN"
       exit 0 ;;
     install) banner "developer-tools $VERSION" "installing everything  · $(channel) channel"
              resolve_base; install_picked $(seq 0 $(( ${#TOOLS[@]} - 1 ))); printf "\n" >&2; exit 0 ;;
-    beta|stable) set_channel "$1"; ok "channel set to $1 — run developer-tools install to update"; exit 0 ;;
+    beta|stable) set_channel "$1"
+             if [ "${2:-}" = install ]; then banner "developer-tools $VERSION" "installing everything · $1 channel"; resolve_base; install_picked $(seq 0 $(( ${#TOOLS[@]} - 1 ))); printf "\n" >&2
+             else ok "channel set to $1 — run developer-tools install to update"; fi
+             exit 0 ;;
     "") ;;
     *) resolve_base; for t in "${TOOLS[@]}"; do [ "$1" = "$t" ] && run_tool "$t"; done
        die "no tool called “$1” — try: developer-tools --help" ;;

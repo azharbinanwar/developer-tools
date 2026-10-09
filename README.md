@@ -83,13 +83,19 @@ Swap `ship-apk` for `ship-site` to get the other one. Run again to update, `sudo
 
 New versions go out as a beta first, for anyone who wants them early. Stable users never see a beta: the one-liners, the hub and Homebrew keep serving the latest stable release until the beta becomes one.
 
+One command installs the newest beta of every tool and switches this Mac to the beta channel:
+
 ```sh
-developer-tools beta      # this Mac now installs the newest release, betas included
-developer-tools install   # get it
-developer-tools stable    # back to stable whenever you like
+bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tools/main/developer-tools) beta install
 ```
 
-The hub's menu has the same switch under **channel**, and `ship-site -v` shows a beta as `2.0.0-beta.1`. The tools are the same files on both channels; only which release you get differs.
+From then on `developer-tools install` keeps you on the newest beta. Back to stable, any time:
+
+```sh
+developer-tools stable install
+```
+
+`ship-site -v` shows a beta as `2.0.0-beta.4`. The tools are the same files on both channels; only which release you get differs.
 
 ### Which one?
 

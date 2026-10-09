@@ -536,5 +536,8 @@ FAKE
   rm -rf "$hb"
   check "tick: q quits without ticking"       is "$(tick a b <<<"q" 2>/dev/null)" ""
   check "hub: --help lists the install mode"  bash -c 'bash ./developer-tools --help | grep -q "install or update every tool"'
+  check "hub: --help shows beta install"      bash -c 'bash ./developer-tools --help | grep -q "developer-tools beta install"'
+  check "hub: beta alone only sets the channel" bash -c 'bash ./developer-tools beta 2>&1 | grep -q "channel set to beta"; [ "$(cat "$HOME/.config/developer-tools/channel")" = beta ]'
+  check "hub: stable alone sets it back"      bash -c 'bash ./developer-tools stable >/dev/null 2>&1; [ "$(cat "$HOME/.config/developer-tools/channel")" = stable ]'
 )
 echo "all good"
