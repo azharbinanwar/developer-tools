@@ -62,7 +62,7 @@ For Firebase, nothing has to be set up in your repo: no `firebase init`, no `fir
 
 - **+ new project**: a Vercel project, or a Firebase site — inside one of your existing Firebase projects (`<name>.web.app`), or in a brand-new Firebase project made from just a name (free plan, Hosting only, no billing). The name you type is cleaned to what the host allows (`Admin.Sukun Garden` → `admin-sukun-garden`) and shown back as **create admin-sukun-garden.web.app** before anything is made; **change the name** asks again. With no account on that host yet, it signs you in first. It asks which account only when you have more than one. One Firebase project can hold several sites on the free plan: a landing page on `sukun-garden.web.app` and the admin on `sukun-garden-admin.web.app`, say.
 - **label a project**: your own name for it: `admin`, `landing`, the domain it serves. Shown in the list and when publishing; it changes nothing on Vercel or Firebase. The first time a folder publishes to a project, a label is suggested from the folder name (`SukunGardenAdmin` → `admin`); Enter takes it, type your own, or leave it blank.
-- **custom domain**: connect your own domain or subdomain (`sukungarden.com`, `admin.sukungarden.com`) to a Firebase site. It prints the DNS records to add at your registrar and copies them. The domain is saved for the site at once and shown on its row as **DNS pending**; Firebase checks the records on its own, and once the domain answers the row shows it in place of `<site>.web.app` and the published link uses it. The `.web.app` address keeps working either way. Vercel domains are added on vercel.com, which shows its records there.
+- **custom domain**: your own domain or subdomain (`sukungarden.com`, `admin.sukungarden.com`) for a project, saved at once as a reminder and shown on its row. On Firebase you can also **connect it now**: it prints the DNS records to add at your registrar and copies them; the row says **DNS pending** until Firebase sees the records, then shows the domain in place of `<site>.web.app` and the published link uses it. The `.web.app` address keeps working either way. Or **just keep it as a reminder** and connect it another time. Vercel domains are added on vercel.com, which shows its records there; the reminder is kept here all the same.
 - **accounts**: add or remove Vercel accounts (browser sign-in or a pasted token, then the team scope) and Firebase accounts (Google sign-in in the browser). With no account yet, it starts by adding one.
 
 ### Several accounts
@@ -143,6 +143,8 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 | `n` | new project | `project.new` |
 | `l` | label a project | `project.label` |
 | `d` | custom domain | `project.domain` |
+| `c` | connect it now (a Firebase custom domain) | `domain.connect` |
+| `r` | just keep it as a reminder | `domain.remember` |
 | `o` | open the link in the browser (after publishing) | `done.link` |
 | `l` | label this project (after publishing) | `done.label` |
 | `p` | back to projects (after publishing) | `projects` |

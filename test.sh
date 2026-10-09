@@ -503,8 +503,16 @@ FAKE
   out="$(bash -c 'source ./ship-site/ship-site; URL=https://x; printf "lmine\np" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
   check "done: console link shown"                           grep -q "console.firebase.google.com/project/shop-1/hosting/sites/shop-1" <<<"$out"
   check "done: label saved from the done screen"             is "$(vc label_get shop-1/shop-1)" mine
-  check "done: a saved domain shows on the screen"           bash -c 'source ./ship-site/ship-site; vc domain_set shop-1/shop-1 shop.example.com; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp 2>&1 | grep -q shop.example.com'
-  vc domain_set shop-1/shop-1 ""
+  out="$(bash -c 'source ./ship-site/ship-site; vc domain_set shop-1/shop-1 shop.example.com; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
+  check "done: a saved domain shows on the screen"           grep -q shop.example.com <<<"$out"
+  out="$(bash -c 'source ./ship-site/ship-site; DRY=no; printf "Admin.SukunGarden.com\nr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' 2>&1)"
+  check "domain: remembered without connecting"              is "$(vc domain_get shop-1/shop-1)" admin.sukungarden.com
+  check "domain: says it is a reminder"                      grep -q "remembered admin.sukungarden.com" <<<"$out"
+  out="$(bash -c 'source ./ship-site/ship-site; DRY=no; printf "shop.vercel.example\n" | custom_domain vercel me prj_9 shop' 2>&1)"
+  check "domain: vercel keeps a reminder and points at vercel.com" grep -q "vercel.com › shop › Domains" <<<"$out"
+  check "domain: vercel reminder saved"                      is "$(vc domain_get prj_9)" shop.vercel.example
+  check "domain: a bad one is refused"                       not bash -c 'source ./ship-site/ship-site; DRY=no; printf "not a domain\n" | custom_domain firebase a@x.com shop-1/shop-1 shop-1'
+  vc domain_set shop-1/shop-1 ""; vc domain_set prj_9 ""
   # cache: a young cache skips the refresh, a stale one runs it
   vc stamp; check "refresh fresh: young cache returns at once" bash -c "source ./ship-site/ship-site; refresh fresh; [ \"\$(vc age)\" -lt 5 ]"
   # removed Firebase account disappears from the list
