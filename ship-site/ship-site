@@ -23,7 +23,7 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="2.0.0-beta.5"
+VERSION="2.0.0-beta.6"
 # ── platform ──────────────────────────────────────────────────────────────
 # macOS, Linux and Windows (Git Bash or WSL) differ in a few commands; everything platform-specific goes through these.
 case "$(uname -s 2>/dev/null)" in Darwin) OS=mac ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS=linux ;; esac
@@ -1016,11 +1016,6 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   [ -f "$root/package.json" ] || die "no package.json in $root"
   pm="$(detect_pm "$root")"
   [ "$DRY" = yes ] || { [ "$host" = firebase ] && need_firebase || need_vercel; }   # before any question or write
-  # remember which project this folder publishes to — not in a dry run, which writes nothing
-  if [ "$DRY" != yes ] && [ "$(vc proj_get "$root" id)" != "$pid" ]; then
-    vc proj_set "$root" account "$acct"; vc proj_set "$root" id "$pid"; vc proj_set "$root" name "$pname"; vc proj_set "$root" host "$host"
-    [ -n "$(vc label_get "$pid")" ] || ask_label "$pid" "$pname" "$root"
-  fi
   label="$(vc label_get "$pid")"
 
   step "${label:-$pname}$([ -n "$label" ] && printf "  ${D}%s${R}" "$pname")"
@@ -1032,14 +1027,21 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   fi
   row "folder" "$root"
   if [ -z "$PROD" ]; then
-    MENU_ITEMS=("main website" "test version")
-    if [ "$host" = firebase ]; then MENU_NOTES=("   ${D}updates ${pid#*/}.web.app${R}" "   ${D}a preview URL for 7 days, the main website untouched${R}")
-    else MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}"); fi
-    if [ "$(menu_pick "Publish to" 0)" = 0 ]; then
-      PROD=yes
-      # a single stray key must not replace the live site
-      if picked_by_key && [ "$DRY" != yes ] && ! confirm_y "Publish to the main website?"; then warn "cancelled — nothing was published"; exit 0; fi
-    else PROD=no; fi
+    MENU_ITEMS=("main website" "test version" "← back")
+    if [ "$host" = firebase ]; then MENU_NOTES=("   ${D}updates ${pid#*/}.web.app${R}" "   ${D}a preview URL for 7 days, the main website untouched${R}" "   ${D}another project or site${R}")
+    else MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}" "   ${D}another project or site${R}"); fi
+    case "$(menu_pick "Publish to" 0)" in
+      0) PROD=yes
+         # a single stray key must not replace the live site
+         if picked_by_key && [ "$DRY" != yes ] && ! confirm_y "Publish to the main website?"; then warn "cancelled — nothing was published"; exit 0; fi ;;
+      1) PROD=no ;;
+      *) return 1 ;;
+    esac
+  fi
+  # remember which project this folder publishes to — not in a dry run, which writes nothing
+  if [ "$DRY" != yes ] && [ "$(vc proj_get "$root" id)" != "$pid" ]; then
+    vc proj_set "$root" account "$acct"; vc proj_set "$root" id "$pid"; vc proj_set "$root" name "$pname"; vc proj_set "$root" host "$host"
+    [ -n "$(vc label_get "$pid")" ] || ask_label "$pid" "$pname" "$root"
   fi
   [ "$PROD" = yes ] && web_version_guard "$root"
 
@@ -1179,8 +1181,7 @@ main(){
          else IFS=$'\x1f' read -r _ h a <<<"${kind[$idx]}"; r="$(new_project "$h" "$a")" || continue; fi
          folder="$(choose_folder "")" || continue
          IFS=$'\t' read -r h a id nm <<<"$r"
-         [ "$DRY" = yes ] || { vc proj_set "$folder" account "$a"; vc proj_set "$folder" id "$id"; vc proj_set "$folder" name "$nm"; vc proj_set "$folder" host "$h"; }
-         deploy "$a" "$id" "$nm" "$folder" "$h"; exit 0 ;;
+         deploy "$a" "$id" "$nm" "$folder" "$h" || continue; exit 0 ;;
       label|domain)
          [ ${#rows[@]} -gt 0 ] || { warn "no projects yet"; continue; }
          local k; MENU_ITEMS=(); MENU_NOTES=()
@@ -1205,7 +1206,7 @@ main(){
     idx="${kind[$idx]#row:}"
     IFS=$'\x1f' read -r a id nm f h <<<"${rows[$idx]}"
     folder="$(choose_folder "$f")" || continue
-    deploy "$a" "$id" "$nm" "$folder" "$h"; exit 0
+    deploy "$a" "$id" "$nm" "$folder" "$h" || continue; exit 0
   done
 }
 

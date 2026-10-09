@@ -131,6 +131,7 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 | `n` | new project | `project.new` |
 | `l` | label a project | `project.label` |
 | `d` | custom domain | `project.domain` |
+| `Esc` | back, on Publish to: another project or site | `back` |
 | `c` | create (a new project or site, after its name is shown) | `new.create` |
 | `e` | change the name | `new.rename` |
 | `a` | accounts | `accounts` |

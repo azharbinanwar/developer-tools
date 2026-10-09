@@ -482,14 +482,18 @@ FAKE
   check "deploy dry: folder link not saved"   is "$(vc proj_get "$p" id)" ""
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=yes; PROD=""; printf "m\n" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy dry: main website skips the y-confirm in a dry run" grep -q "firebase deploy --only hosting" <<<"$out"
+  p2="$(mktemp -d)"; cp "$p/package.json" "$p2/"
   # the y-confirm guards a real main-website publish picked by a single key
-  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "admin\nmx" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "mx" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  check "deploy: main website by key, then not y → cancelled" grep -q "cancelled — nothing was published" <<<"$out"
+  check "deploy: a cancelled publish links nothing"          is "$(vc proj_get "$p" id)" ""
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "myadmin\np" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy: first link from a folder asks for a label"  grep -q "Label for shop-1" <<<"$out"
   check "deploy: the label is saved"                         is "$(vc label_get shop-1/shop-1)" admin
-  check "deploy: main website by key, then not y → cancelled" grep -q "cancelled — nothing was published" <<<"$out"
-  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "mx" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  check "deploy: the folder is linked"                       is "$(vc proj_get "$p" id)" shop-1/shop-1
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "myp" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy: a linked folder is not asked again"         not grep -q "Label for" <<<"$out"
-  check "deploy: the label heads the screen"                 grep -q "admin" <<<"$out"
+  check "deploy: the label heads the screen"                 grep -q "▸ admin" <<<"$out"
   # cache: a young cache skips the refresh, a stale one runs it
   vc stamp; check "refresh fresh: young cache returns at once" bash -c "source ./ship-site/ship-site; refresh fresh; [ \"\$(vc age)\" -lt 5 ]"
   # removed Firebase account disappears from the list
