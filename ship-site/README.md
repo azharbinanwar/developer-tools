@@ -56,7 +56,7 @@ ship-site -v           version
    [q]  quit
 ```
 
-Every Vercel project and Firebase site across all your accounts, grouped by account. A Firebase project with several sites shows them under its own line. Each row shows the address it serves (your own domain once it is connected, else the host's), how many times you published it from this Mac and when last. The list opens from a local cache at once and is refreshed when it is older than 10 minutes, or with **refresh**. Each Firebase project shows its default hosting site; extra sites appear once you create them through **+ new project**. Projects you have built from this Mac come first. Inside a project folder, the one it publishes to is preselected; a folder set up with the Firebase CLI before gets its `.firebaserc` project preselected the first time, no searching. Expired Vercel sign-ins are renewed on their own.
+Every Vercel project and Firebase site across all your accounts, grouped by account. A Firebase project with several sites shows them under its own line. Each row shows the address it serves (your own domain once it is connected, else the host's), how many times you published it from this Mac and when last. The list opens from a local cache at once and is refreshed when it is older than 10 minutes, or with **refresh**. Each Firebase project shows its default hosting site; extra sites appear once you create them through **+ new project**. Projects you have built from this Mac come first. Inside a project folder, the one it publishes to is preselected; a folder set up with the Firebase CLI before gets its `.firebaserc` project preselected the first time, and a site named like the folder (`SukunGardenWeb` → `sukun-garden`) is preselected too, no searching. Expired Vercel sign-ins are renewed on their own.
 
 For Firebase, nothing has to be set up in your repo: no `firebase init`, no `firebase.json`. Sign in once, pick or create a project, publish.
 
@@ -71,7 +71,7 @@ Vercel accounts each keep their own sign-in under `~/.config/ship-site/accounts/
 
 ### 2. Folder
 
-Inside a project, that folder is built. Outside one, the folder the project was last built from is used, or it asks once and remembers.
+Inside a project, that folder is built, no question asked. Outside one, the folder the project was last built from is used, or it asks once and remembers.
 
 ### 3. Where
 
@@ -190,8 +190,6 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 | `t` | paste a token | `signin.token` |
 | `v` | vercel | `host.vercel` |
 | `f` | firebase | `host.firebase` |
-| `t` | this folder | `folder.this` |
-| `l` | the folder it was built from last time | `folder.last` |
 | `d` | remove it | `account.remove` |
 | `d` | sign it out | `account.signout` |
 | `p` | personal | `scope.personal` |

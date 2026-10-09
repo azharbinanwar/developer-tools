@@ -644,12 +644,7 @@ refresh(){ # pulls every account's projects into the cache behind a spinner; "fr
 
 choose_folder(){ # $1 folder this project was last built from -> echoes the folder to build now
   local saved="$1" p
-  if [ -n "$ROOT" ] && { [ -z "$saved" ] || [ "$saved" = "$ROOT" ] || [ ! -d "$saved" ]; }; then printf '%s' "$ROOT"; return; fi
-  if [ -n "$ROOT" ]; then
-    MENU_ITEMS=("this folder" "the folder it was built from last time"); MENU_NOTES=("  ${D}${ROOT}${R}" "  ${D}${saved}${R}")
-    step "Which folder to build"
-    [ "$(menu_pick "Build" 0)" = 0 ] && printf '%s' "$ROOT" || printf '%s' "$saved"; return
-  fi
+  [ -n "$ROOT" ] && { printf '%s' "$ROOT"; return; }   # you are in a project: that is the one; another folder on the same site is warned about later
   [ -n "$saved" ] && is_project "$saved" && { printf '%s' "$saved"; return; }
   step "Which folder to build"
   while :; do
@@ -797,7 +792,7 @@ vercel_json_project(){ # $1 folder -> the Vercel project id its .vercel/project.
 }
 
 rank_rows(){ # stdin: landing rows; $1 folder $2 .firebaserc project $3 firebase.json site $4 .vercel project $5 names
-  # -> the rows grouped by account and host, each with its rank (0 path, 1 config, 2 name, 9 none) and why
+  # -> the rows grouped by account and host, each with its rank (0 path, 1 config, 2 name, 3 similar name, 9 none) and why
   py -c '
 import sys
 root, rc, fbsite, vid = sys.argv[1:5]
@@ -807,13 +802,16 @@ def rank(r):
     a, i, n, u, f, h, lb = r[:7]
     if root and f == root: return 0, "this folder"
     if f and f != root: return 9, ""
+    like = lambda x: x and any(len(x) > 3 and len(m) > 3 and (m.startswith(x) or x.startswith(m)) for m in names)
     if h == "firebase":
         pid, site = (i.split("/") + [""])[:2]
         if (rc and pid == rc) or (fbsite and site == fbsite): return 1, "this folder’s firebase config"
         if pid in names or site in names or n.lower() in names: return 2, "same name as this folder"
+        if like(site) or like(n.lower()): return 3, "named like this folder"
     else:
         if vid and i == vid: return 1, "this folder’s .vercel link"
         if n.lower() in names: return 2, "same name as this folder"
+        if like(n.lower()): return 3, "named like this folder"
     return 9, ""
 groups = {}
 for r in rows: groups.setdefault((r[5], r[0]), []).append(r)

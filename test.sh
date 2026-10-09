@@ -434,6 +434,8 @@ g@x${US}other/other${US}other${US}other.web.app${US}/the/folder${US}firebase${US
   check "rank: .vercel link is config"             grep -qx "web 1" <<<"$(rr /x "" "" prj_v1 "")"
   check "rank: same name as the folder"            grep -qx "my-app 2" <<<"$(rr /x "" "" "" "my-app")"
   check "rank: nothing matches"                    is "$(rr /x "" "" "" "zzz" | cut -d' ' -f2 | sort -u)" 9
+  check "rank: a site named like the folder"       grep -qx "shop-1 3" <<<"$(rr /x "" "" "" "shop-1-web shopweb")"
+  check "rank: short names never match by prefix"  grep -qx "web 9" <<<"$(rr /x "" "" "" "we")"
   check "rank: a project linked to another folder never matches" grep -qx "other 9" <<<"$(rr /x other "" "" "other")"
   check "rank: the best match's group comes first" is "$(rank_rows /x shop-1 "" "" "" <<<"$landing" | head -1 | cut -d"$US" -f6)" firebase
   two="g@x${US}shop-1/shop-1${US}shop-1${US}shop-1.web.app${US}${US}firebase${US}${US}Shop
