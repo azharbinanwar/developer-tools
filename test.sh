@@ -6,7 +6,9 @@ cd "$(dirname "$0")"
 check(){ # $1 name, then a command; one line per check, stops at the first failure
   local name="$1"; shift
   if "$@" >/dev/null 2>&1; then printf '  ok   %s\n' "$name"
-  else printf '  FAIL %s\n' "$name"; "$@" || true; exit 1; fi
+  else printf '  FAIL %s\n' "$name"; "$@" || true
+       [ -n "${out:-}" ] && { printf '    --- output of the flow under test (last 30 lines) ---\n'; printf '%s\n' "$out" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tail -30; }
+       exit 1; fi
 }
 is(){ [ "$1" = "$2" ] || { printf '    got:  %s\n    want: %s\n' "$1" "$2"; return 1; }; }
 not(){ ! "$@"; }
