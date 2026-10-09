@@ -16,7 +16,7 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="2.0.0-beta.2"
+VERSION="2.0.0-beta.3"
 # ── platform ──────────────────────────────────────────────────────────────
 # macOS, Linux and Windows (Git Bash or WSL) differ in a few commands; everything platform-specific goes through these.
 case "$(uname -s 2>/dev/null)" in Darwin) OS=mac ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS=linux ;; esac
@@ -497,7 +497,9 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
     [ "$(ask_yn "Try the upload anyway" true)" = true ] || return 1
   fi
 
-  while read -rst 0 -n 10000 _ 2>/dev/null; do :; done   # drop arrow keys typed during the menus
+  # drop arrow keys typed during the menus — only on a real terminal: at end of a closed stdin, Linux reports
+  # "input available" forever and the old unconditional loop never ended
+  if [ -t 0 ]; then while read -rst 0 _ 2>/dev/null; do IFS= read -rsn 1000 -t 1 _ 2>/dev/null || break; done; fi
   step "Uploading"
   row "build" "$(basename "$apk")  ${D}$((bytes / 1048576)) MB${R}"
   row "app" "$name"
