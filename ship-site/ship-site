@@ -265,6 +265,7 @@ elif op == "domain_set":  # id domain -> remembered at once, shown as pending un
     else: doms.pop(a[0], None)
     save()
 elif op == "domain_get": print(d.get("domains", {}).get(a[0], ""))
+elif op == "folder_of":  print(next((f for f, pr in sorted(d["projects"].items()) if pr.get("id") == a[0]), ""))
 elif op == "fb_accounts": [print(e) for e in d.get("fb_accounts", [])]
 elif op == "stamp":     import time; d["refreshed_at"] = int(time.time()); save()
 elif op == "age":       import time; print(int(time.time()) - int(d.get("refreshed_at") or 0))
@@ -1034,29 +1035,40 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   [ -f "$root/package.json" ] || die "no package.json in $root"
   pm="$(detect_pm "$root")"
   [ "$DRY" = yes ] || { [ "$host" = firebase ] && need_firebase || need_vercel; }   # before any question or write
-  label="$(vc label_get "$pid")"
-
-  step "${label:-$pname}$([ -n "$label" ] && printf "  ${D}%s${R}" "$pname")"
-  if [ "$host" = firebase ]; then
-    row "host" "Firebase  ${D}${acct}${R}"
-    row "project" "${pid%%/*}"
-    domain="$(vc domain_get "$pid")"
-    [ -n "$domain" ] && row "domain" "${domain}$([ "$(vc url_get "$pid")" != "$domain" ] && printf "  ${Y}DNS pending${R}")  ${D}also ${pid#*/}.web.app, which stays as is${R}"
-  else
-    row "host" "Vercel  ${D}${acct} · $(vc acct_get "$acct" scope)${R}"
-  fi
-  row "folder" "$root"
-  if [ -z "$PROD" ]; then
-    MENU_ITEMS=("main website" "test version" "← back")
-    if [ "$host" = firebase ]; then MENU_NOTES=("   ${D}updates ${pid#*/}.web.app${R}" "   ${D}a preview URL for 7 days, the main website untouched${R}" "   ${D}another project or site${R}")
-    else MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}" "   ${D}another project or site${R}"); fi
+  while :; do
+    label="$(vc label_get "$pid")"; domain="$(vc domain_get "$pid")"
+    step "${label:-$pname}$([ -n "$label" ] && printf "  ${D}%s${R}" "$pname")"
+    if [ "$host" = firebase ]; then
+      row "host" "Firebase  ${D}${acct}${R}"
+      row "project" "${pid%%/*}"
+    else
+      row "host" "Vercel  ${D}${acct} · $(vc acct_get "$acct" scope)${R}"
+    fi
+    row "folder" "$root"
+    if [ -n "$domain" ]; then
+      [ "$host" = firebase ] && [ "$(vc url_get "$pid")" != "$domain" ] && row "domain" "${domain}  ${Y}DNS pending${R}  ${D}also ${pid#*/}.web.app, which stays as is${R}" \
+                                                                        || row "domain" "${domain}  ${D}also ${pid#*/}.$([ "$host" = firebase ] && echo web.app || echo vercel.app), which stays as is${R}"
+    else row "domain" "${D}none yet${R}"; fi
+    [ -n "$PROD" ] && break
+    MENU_ITEMS=("main website" "test version" "custom domain" "← back")
+    if [ "$host" = firebase ]; then MENU_NOTES=("   ${D}updates ${pid#*/}.web.app$([ -n "$domain" ] && echo " and ${domain} once live")${R}" "   ${D}a preview URL for 7 days, the main website untouched${R}")
+    else MENU_NOTES=("   ${D}updates production${R}" "   ${D}a new preview URL, production untouched${R}"); fi
+    MENU_NOTES+=("   ${D}${domain:-your own domain or subdomain}, saved as a reminder; connect it now or later${R}" "   ${D}another project or site${R}")
     case "$(menu_pick "Publish to" 0)" in
       0) PROD=yes
          # a single stray key must not replace the live site
-         if picked_by_key && [ "$DRY" != yes ] && ! confirm_y "Publish to the main website?"; then warn "cancelled — nothing was published"; exit 0; fi ;;
-      1) PROD=no ;;
+         if picked_by_key && [ "$DRY" != yes ] && ! confirm_y "Publish to the main website?"; then warn "cancelled — nothing was published"; exit 0; fi
+         break ;;
+      1) PROD=no; break ;;
+      2) custom_domain "$host" "$acct" "$pid" "$pname" || true; continue ;;
       *) return 1 ;;
     esac
+  done
+  # another folder already publishes here: say so before anything is built, and let the user back out
+  domain="$(vc folder_of "$pid")"
+  if [ -n "$domain" ] && [ "$domain" != "$root" ]; then
+    warn "${label:-$pname} is published from $(sed "s|^$HOME|~|" <<<"$domain")"
+    confirm_y "Publish $(sed "s|^$HOME|~|" <<<"$root") there instead, replacing what is live?" || { ok "nothing changed — back to projects"; return 1; }
   fi
   # remember which project this folder publishes to — not in a dry run, which writes nothing
   if [ "$DRY" != yes ] && [ "$(vc proj_get "$root" id)" != "$pid" ]; then

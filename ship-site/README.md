@@ -75,7 +75,21 @@ Inside a project, that folder is built. Outside one, the folder the project was 
 
 ### 3. Where
 
-**main website** (production) or **test version**. `--prod` and `--preview` skip the question.
+```
+▸ sukun-garden
+   host        Firebase  mohsin@…
+   project     sukun-garden
+   folder      /Users/azharali/Desktop/mine/SukunGardenWeb
+   domain      admin.sukungarden.com  DNS pending  also sukun-garden.web.app, which stays as is
+ ❯ [m]  main website    updates sukun-garden.web.app and admin.sukungarden.com once live
+   [t]  test version    a preview URL for 7 days, the main website untouched
+   [d]  custom domain   admin.sukungarden.com, saved as a reminder; connect it now or later
+        ← back          another project or site
+```
+
+**main website** (production) or **test version**. `--prod` and `--preview` skip the question. **custom domain** saves your domain for this project right here (see [Projects](#1-projects)); the screen redraws with it.
+
+If another folder already publishes to this project, you are told which one and asked `y` before anything is built; any other key goes back to the list with nothing changed. A folder moving to a different project is not asked: that is the normal way to give the admin its own site.
 
 | | Vercel | Firebase |
 | --- | --- | --- |

@@ -499,6 +499,18 @@ FAKE
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "myp" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy: a linked folder is not asked again"         not grep -q "Label for" <<<"$out"
   check "deploy: the label heads the screen"                 grep -q "▸ admin" <<<"$out"
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "dadmin.shop.example\nr\e" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  check "publish-to: custom domain saved from that screen"   is "$(vc domain_get shop-1/shop-1)" admin.shop.example
+  check "publish-to: the screen redraws with the domain"     grep -q "DNS pending" <<<"$out"
+  check "publish-to: main website names the domain"          grep -q "web.app and admin" <<<"$out"
+  vc domain_set shop-1/shop-1 ""
+  check "swap: another folder on the same site is warned and backs out" not bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "tn" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p2"
+  out="$(bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "tn" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p2" 2>&1 || true)"
+  check "swap: the warning names the other folder"           grep -q "is published from $p" <<<"$out"
+  check "swap: backing out keeps the old link"               is "$(vc folder_of shop-1/shop-1)" "$p"
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "ty" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p2" 2>&1 || true)"
+  check "swap: y goes on and relinks the folder"             is "$(vc proj_get "$p2" id)" shop-1/shop-1
+  vc proj_set "$p2" id ""
   check "done: back to projects returns"                     bash -c 'source ./ship-site/ship-site; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp'
   out="$(bash -c 'source ./ship-site/ship-site; URL=https://x; printf "lmine\np" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
   check "done: console link shown"                           grep -q "console.firebase.google.com/project/shop-1/hosting/sites/shop-1" <<<"$out"
