@@ -23,7 +23,7 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="2.0.0-beta.4"
+VERSION="2.0.0-beta.5"
 # ── platform ──────────────────────────────────────────────────────────────
 # macOS, Linux and Windows (Git Bash or WSL) differ in a few commands; everything platform-specific goes through these.
 case "$(uname -s 2>/dev/null)" in Darwin) OS=mac ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS=linux ;; esac
@@ -114,6 +114,36 @@ def api(token, team, method, ep, body=None):
     except urllib.error.URLError as e:
         raise ApiErr("cannot reach Vercel: %s" % e.reason)
 
+def ago(t):  # epoch -> "today", "3d ago", "2mo ago"; "" for none
+    import time
+    if not t: return ""
+    d_ = (int(time.time()) - int(t)) // 86400
+    if d_ < 1: return "today"
+    if d_ < 7: return "%dd ago" % d_
+    if d_ < 30: return "%dw ago" % (d_ // 7)
+    if d_ < 365: return "%dmo ago" % (d_ // 30)
+    return "%dy ago" % (d_ // 365)
+
+def cli_token(email):  # the Firebase CLI's current access token for that Google account, or "" when it has expired
+    import time
+    cs = os.path.join(os.path.expanduser("~"), ".config", "configstore", "firebase-tools.json")
+    try: c = json.load(open(cs))
+    except Exception: c = {}
+    accts = [(c.get("user", {}).get("email"), c.get("tokens", {}))] + [(x.get("user", {}).get("email"), x.get("tokens", {})) for x in c.get("additionalAccounts", [])]
+    tok = next((t for e, t in accts if e == email), {})
+    return tok.get("access_token", "") if tok.get("expires_at", 0) / 1000 > time.time() + 60 else ""
+
+def fb_get(token, ep):  # one Hosting API read; {} on any trouble
+    req = urllib.request.Request("https://firebasehosting.googleapis.com/v1beta1/" + ep, headers={"Authorization": "Bearer " + token})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r: raw = r.read(); return json.loads(raw) if raw else {}
+    except Exception: return {}
+
+def fb_domain_of(token, pid, site):  # the site's connected custom domain, if one is live; "" otherwise
+    ds = fb_get(token, "projects/%s/sites/%s/customDomains" % (pid, site)).get("customDomains", [])
+    live = [d_["name"].rsplit("/", 1)[-1] for d_ in ds if d_.get("hostState") == "HOST_ACTIVE"]
+    return min(live, key=len) if live else ""
+
 def pages(token, team, ep, key):
     out, until = [], None
     while True:
@@ -169,6 +199,12 @@ elif op == "fb_refresh":  # every Firebase CLI login's projects with a hosting s
                     new.append({"host": "firebase", "account": e, "id": pr["projectId"] + "/" + site, "name": site,
                                 "url": site + ".web.app", "project": pr.get("displayName") or pr["projectId"]})
             new += [c for c in old if c.get("host") == "firebase" and c.get("account") == e and c.get("extra")]
+            tok = cli_token(e)   # projects:list just renewed it
+            if tok and os.environ.get("SHIP_SITE_NO_DOMAINS") != "1":
+                from concurrent.futures import ThreadPoolExecutor
+                mine = [c for c in new if c.get("host") == "firebase" and c["account"] == e]
+                for c, dom in zip(mine, ThreadPoolExecutor(16).map(lambda c: fb_domain_of(tok, *c["id"].split("/", 1)), mine)):
+                    c["url"] = dom or c["name"] + ".web.app"
         except Exception as x:
             sys.stderr.write("%s\t%s\n" % (e, x))
             new += [c for c in old if c.get("host") == "firebase" and c.get("account") == e]
@@ -178,14 +214,44 @@ elif op == "cache_add":  # account id name url [host] [project name]
     row = {"host": a[4] if len(a) > 4 else "vercel", "account": a[0], "id": a[1], "name": a[2], "url": a[3]}
     if len(a) > 5: row.update(project=a[5], extra=True)
     d.setdefault("cache", []).append(row); save()
-elif op == "landing":   # cached projects: account id name url folder host label, \x1f-separated (empty fields survive)
-    folders, labels = {}, d.get("labels", {})
+elif op == "landing":   # cached projects: account id name url folder host label project count last, \x1f-separated (empty fields survive)
+    folders, labels, stats = {}, d.get("labels", {}), d.get("stats", {})
     for f, pr in d["projects"].items(): folders.setdefault(pr.get("id"), f)
     # projects already built from a folder on this Mac come first, then the rest by name
     for c in sorted(d.get("cache", []), key=lambda c: (c["id"] not in folders, c["name"])):
-        h = c.get("host", "vercel")
+        h, st = c.get("host", "vercel"), stats.get(c["id"], {})
         if (h == "vercel" and c["account"] in d["accounts"]) or (h == "firebase" and c["account"] in d.get("fb_accounts", [])):
-            print("\x1f".join([c["account"], c["id"], c["name"], c["url"], folders.get(c["id"], ""), h, labels.get(c["id"], "")]))
+            print("\x1f".join([c["account"], c["id"], c["name"], c["url"], folders.get(c["id"], ""), h, labels.get(c["id"], ""),
+                               c.get("project", ""), str(st.get("count", "") or ""), ago(st.get("last"))]))
+elif op == "stat_add":  # id -> one more publish, now
+    import time
+    st = d.setdefault("stats", {}).setdefault(a[0], {}); st["count"] = st.get("count", 0) + 1; st["last"] = int(time.time()); save()
+elif op == "stat_get":  st = d.get("stats", {}).get(a[0], {}); print("%s\t%s" % (st.get("count", 0), ago(st.get("last"))))
+elif op == "fb_token":  print(cli_token(a[0]))
+elif op == "url_get":   print(next((c["url"] for c in d.get("cache", []) if c["id"] == a[0]), ""))
+elif op == "fb_domain":  # token project site domain -> the DNS records to add, type<TAB>host<TAB>value; connects the domain to the site first
+    import time
+    base = "https://firebasehosting.googleapis.com/v1beta1/projects/%s/sites/%s/customDomains" % (a[1], a[2])
+    def call(ep, method="GET", body=None):
+        req = urllib.request.Request(base + ep, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Authorization": "Bearer " + a[0], "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r: raw = r.read(); return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            try: msg = json.loads(e.read()).get("error", {}).get("message", str(e))
+            except Exception: msg = str(e)
+            if e.code == 409: return {}   # connected already: just read its records
+            raise ApiErr(msg)
+        except urllib.error.URLError as e: raise ApiErr("cannot reach Firebase: %s" % e.reason)
+    call("?customDomainId=" + a[3], "POST", {})
+    for _ in range(15):
+        cd = call("/" + a[3])
+        recs = [r for g in (cd.get("requiredDnsUpdates") or {}).get("desired", []) for r in g.get("records", [])]
+        recs += [r for g in ((cd.get("cert") or {}).get("verification") or {}).get("dns", {}).get("desired", []) for r in g.get("records", [])]
+        if recs or cd.get("hostState") == "HOST_ACTIVE": break
+        time.sleep(2)
+    if not recs: print("live\t%s\t%s" % (cd.get("hostState", ""), cd.get("ownershipState", ""))); sys.exit(0)
+    for r in recs: print("%s\t%s\t%s" % (r["type"], r["domainName"], r["rdata"]))
 elif op == "label_set":
     labels = d.setdefault("labels", {})
     if a[1]: labels[a[0]] = a[1]
@@ -278,6 +344,10 @@ IFS= read -r -d '' ACTIONS <<'ACTS' || true   # a heredoc, so option texts may h
 new project here|-|
 new project|project.new|n
 label a project|project.label|l
+custom domain|project.domain|d
+create a new firebase project|new.firebase_project|c
+create|new.create|c
+change the name|new.rename|e
 accounts|accounts|a
 refresh|refresh|r
 quit|quit|q
@@ -287,7 +357,6 @@ publish as|version.keep|p
 bump|version.bump|b
 vercel project|new.vercel|v
 firebase site|new.firebase|f
-create a new firebase project|new.firebase_project|c
 add a firebase account|account.add_firebase|f
 add a vercel account|account.add_vercel|v
 sign in with vercel in the browser|signin.browser|b
@@ -346,7 +415,7 @@ menu_pick(){ # $1 title  $2 start index -> echoes chosen index
     if [ "$ctxl" = 1 ]; then
       # the heading of the group in view, pinned when it has scrolled off the top
       ctx=""; g=$([ "$sel" -lt "$ns" ] && echo "$sel" || echo "$top")
-      while [ "$g" -ge 0 ] && ! is_head "$g"; do g=$((g - 1)); done
+      while [ "$g" -ge 0 ] && { ! is_head "$g" || [ "${MENU_ITEMS[$g]:1:1}" = " " ]; }; do g=$((g - 1)); done
       [ "$g" -ge 0 ] && [ "$g" -lt "$top" ] && ctx="${rows[$g]:1}"
       printf "\r\033[K     ${B}%s${R}%s\n" "$ctx" "$([ "$top" -gt 0 ] && printf "  ${D}▲ %s more${R}" "$top")" >&2
     fi
@@ -653,11 +722,11 @@ new_project(){ # $1 host  $2 account (both optional: given from a group's own ro
     fi
     pid="${pids[$((idx - 1))]}"
     while :; do
-      pname="$(slugify "$(ask "Site name (becomes <name>.web.app)" "$n")")"; [ -n "$pname" ] || return 1
+      pname="$(confirm_name "Site name (becomes <name>.web.app)" "$n" "NAME.web.app  in ${pid}")" || return 1
       [ "$DRY" = yes ] && { ok "would create site “${pname}” in ${pid}  ${D}(dry run, not created)${R}"; return 1; }
       cmd "firebase hosting:sites:create $pname --project $pid --account $acct"
       r="$(firebase hosting:sites:create "$pname" --project "$pid" --account "$acct" --non-interactive 2>&1)" && break
-      warn "$(printf '%s' "$r" | grep -i error | tail -1 | sed 's/^Error: //')"
+      warn "$(printf '%s' "$r" | grep -i error | tail -1 | sed 's/^Error: //')"; n="$pname"
     done
     ok "created site “${pname}” → ${pname}.web.app"
     vc cache_add "$acct" "$pid/$pname" "$pname" "$pname.web.app" firebase "$pid"
@@ -669,11 +738,10 @@ new_project(){ # $1 host  $2 account (both optional: given from a group's own ro
   token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
   step "New Vercel project in “${acct}”  ${D}$(vc acct_get "$acct" scope)${R}"
   while :; do
-    pname="$(ask "Project name" "$n")"; [ -n "$pname" ] || return 1
-    pname="$(slugify "$pname")"
+    pname="$(confirm_name "Project name" "$n" "NAME  on Vercel in “${acct}”")" || return 1
     [ "$DRY" = yes ] && { ok "would create “${pname}” in “${acct}”  ${D}(dry run, not created)${R}"; return 1; }
     r="$(vc create "$token" "${team:--}" "$pname")" && break
-    warn "${r#ERR	}"
+    warn "${r#ERR	}"; n="$pname"
   done
   ok "created “${r#*	}”"
   vc cache_add "$acct" "${r%%	*}" "${r#*	}" "${r#*	}.vercel.app"
@@ -701,9 +769,9 @@ rank_rows(){ # stdin: landing rows; $1 folder $2 .firebaserc project $3 firebase
 import sys
 root, rc, fbsite, vid = sys.argv[1:5]
 names = set(n for n in sys.argv[5].split() if n)
-rows = [(l.rstrip("\n").split("\x1f") + [""] * 7)[:7] for l in sys.stdin if l.strip()]
+rows = [(l.rstrip("\n").split("\x1f") + [""] * 10)[:10] for l in sys.stdin if l.strip()]
 def rank(r):
-    a, i, n, u, f, h, lb = r
+    a, i, n, u, f, h, lb = r[:7]
     if root and f == root: return 0, "this folder"
     if f and f != root: return 9, ""
     if h == "firebase":
@@ -717,10 +785,15 @@ def rank(r):
 groups = {}
 for r in rows: groups.setdefault((r[5], r[0]), []).append(r)
 best = lambda g: min(rank(r)[0] for r in groups[g])
+pid = lambda r: r[1].split("/")[0] if r[5] == "firebase" else r[1]
 for g in sorted(groups, key=lambda g: (best(g), g[0] != "vercel", g[1].lower())):
-    for r in groups[g]:
+    first = {}
+    for r in groups[g]: first.setdefault(pid(r), len(first))
+    sites = {}
+    for r in groups[g]: sites[pid(r)] = sites.get(pid(r), 0) + 1
+    for r in sorted(groups[g], key=lambda r: first[pid(r)]):
         k, why = rank(r)
-        print("\x1f".join(r + [str(k), why]))
+        print("\x1f".join(r + [str(k), why, str(sites[pid(r)])]))
 ' "$@"
 }
 
@@ -732,6 +805,31 @@ detect_pm(){ # $1 root -> the package manager whose lockfile is there, npm other
   else echo npm; fi
 }
 slugify(){ printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//'; }
+confirm_name(){ # $1 prompt  $2 suggested  $3 what it becomes, with NAME standing for the name -> echoes the cleaned name once it is confirmed
+  local typed name
+  while :; do
+    typed="$(ask "$1" "$2")"; [ -n "$typed" ] || return 1
+    name="$(slugify "$typed")"; [ -n "$name" ] || { warn "nothing usable in “${typed}” — letters, digits and dashes"; continue; }
+    [ "$name" != "$typed" ] && sub "cleaned to ${B}${name}${R} — only lowercase letters, digits and dashes are allowed"
+    MENU_ITEMS=("create  ${3//NAME/$name}" "change the name" "← back"); MENU_NOTES=("" "" "")
+    case "$(menu_pick "Create it" 0)" in 0) printf '%s' "$name"; return ;; 1) set -- "$1" "$name" "$3" ;; *) return 1 ;; esac
+  done
+}
+guess_label(){ # $1 folder -> a label guessed from its name: admin, dashboard, landing, api, docs; nothing when it says nothing
+  local n; n="$(basename "$1" | tr 'A-Z' 'a-z')"
+  case "$n" in
+    *admin*)                        echo admin ;;
+    *dashboard*|*panel*)            echo dashboard ;;
+    *landing*|*website*|*-web|*web|*site|*www*|*home*) echo landing ;;
+    *api*)                          echo api ;;
+    *docs*)                         echo docs ;;
+  esac
+}
+ask_label(){ # $1 id  $2 name  $3 folder -> asks for a label once, guessed from the folder; blank keeps none
+  local g l; g="$(guess_label "$3")"
+  l="$(ask "Label for ${2}, so you tell it apart later$([ -n "$g" ] && echo " (guessed from the folder name)")" "$g")"
+  [ -n "$l" ] && { vc label_set "$1" "$l"; ok "labelled “${l}”"; }
+}
 outdir(){ # $1 root -> the build output folder with an index.html: dist (Vite), build (Create React App), out (Next.js export), _site (Eleventy, Jekyll)
   local d; for d in dist build out _site; do [ -f "$1/$d/index.html" ] && { printf '%s' "$d"; return; }; done
 }
@@ -864,7 +962,8 @@ publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
     cmd "firebase deploy --only hosting --project $proj --account $acct"
     ( cd "$stage" && firebase deploy --only hosting --project "$proj" --account "$acct" --non-interactive ) > >(tee "$log" >&2) 2>&1 \
       || fail "Firebase rejected the deploy — nothing was published" "$log"
-    url="https://${site}.web.app"
+    url="https://$(vc url_get "${proj}/${site}")"; [ "$url" = "https://" ] && url="https://${site}.web.app"
+    vc stat_add "${proj}/${site}"
     vc proj_set "$root" last_prod_version "$(node -p "require('$root/package.json').version||''" 2>/dev/null)"
     vc proj_set "$root" last_prod_date "$(date '+%d %b %H:%M')"
   else
@@ -873,10 +972,41 @@ publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
       || { printf '%s\n' "$out" >>"$log"; fail "Firebase rejected the preview — nothing was published" "$log"; }
     url="$(printf '%s' "$out" | py -c 'import json,sys;r=json.load(sys.stdin).get("result",{});print(next((v.get("url","") for v in r.values() if isinstance(v,dict)),""))' 2>/dev/null)"
     [ -n "$url" ] || { printf '%s\n' "$out" >>"$log"; fail "Firebase finished but returned no preview URL" "$log"; }
+    vc stat_add "${proj}/${site}"
   fi
   printf %s "$url" | clip 2>/dev/null
   step "Published"
   row "link" "${B}${A}${url}${R}  ${D}copied${R}"
+  printf "\n" >&2
+}
+
+custom_domain(){ # $1 account  $2 project/site  $3 site name -> connects a domain to the site and prints the DNS records to add
+  local acct="$1" proj="${2%%/*}" site="${2#*/}" dom tok out t h v text=""
+  step "Custom domain for ${3}  ${D}${site}.web.app${R}"
+  sub "a domain you own, or a subdomain of one: sukungarden.com, admin.sukungarden.com"
+  dom="$(ask "Domain" "")"; [ -n "$dom" ] || return 1
+  dom="$(printf '%s' "$dom" | tr 'A-Z' 'a-z' | sed 's|^https\{0,1\}://||; s|/.*||; s/^www\.//')"
+  echo "$dom" | grep -Eq '^([a-z0-9-]+\.)+[a-z]{2,}$' || { warn "“${dom}” does not look like a domain"; return 1; }
+  [ "$DRY" = yes ] && { ok "would connect ${dom} to ${site} and show the DNS records to add  ${D}(dry run, nothing connected)${R}"; return 0; }
+  need_firebase
+  tok="$(vc fb_token "$acct")"
+  [ -n "$tok" ] || { firebase projects:list --account "$acct" >/dev/null 2>&1; tok="$(vc fb_token "$acct")"; }
+  [ -n "$tok" ] || { warn "no Firebase login for ${acct} on this Mac — sign in again under accounts"; return 1; }
+  cmd "firebasehosting.googleapis.com … sites/${site}/customDomains/${dom}"
+  out="$(vc fb_domain "$tok" "$proj" "$site" "$dom")" || { warn "${out#ERR	}"; return 1; }
+  if [ "${out%%	*}" = live ]; then ok "${dom} is connected already — no records to add"; return 0; fi
+  step "Add these records at your domain’s DNS (registrar)"
+  printf "     ${D}%-6s %-44s %s${R}\n" type host value >&2
+  while IFS=$'\t' read -r t h v; do
+    [ -n "$t" ] || continue
+    printf "     ${B}%-6s${R} %-44s ${A}%s${R}\n" "$t" "$h" "$v" >&2
+    text="${text}${t}  ${h}  ${v}
+"
+  done <<<"$out"
+  printf '%s' "$text" | clip 2>/dev/null && sub "copied"
+  sub "Firebase checks them on its own; the site answers on ${dom} once they are live, usually within an hour, sometimes a day"
+  sub "https://console.firebase.google.com/project/${proj}/hosting/sites/${site}"
+  sub "once it answers, the list shows ${dom} in place of ${site}.web.app (refresh)"
   printf "\n" >&2
 }
 
@@ -887,7 +1017,10 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   pm="$(detect_pm "$root")"
   [ "$DRY" = yes ] || { [ "$host" = firebase ] && need_firebase || need_vercel; }   # before any question or write
   # remember which project this folder publishes to — not in a dry run, which writes nothing
-  [ "$DRY" = yes ] || { vc proj_set "$root" account "$acct"; vc proj_set "$root" id "$pid"; vc proj_set "$root" name "$pname"; vc proj_set "$root" host "$host"; }
+  if [ "$DRY" != yes ] && [ "$(vc proj_get "$root" id)" != "$pid" ]; then
+    vc proj_set "$root" account "$acct"; vc proj_set "$root" id "$pid"; vc proj_set "$root" name "$pname"; vc proj_set "$root" host "$host"
+    [ -n "$(vc label_get "$pid")" ] || ask_label "$pid" "$pname" "$root"
+  fi
   label="$(vc label_get "$pid")"
 
   step "${label:-$pname}$([ -n "$label" ] && printf "  ${D}%s${R}" "$pname")"
@@ -937,6 +1070,7 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   log="$stage-deploy.log"
   url="$(cd "$stage" && vercel deploy --yes $flag "${AUTH[@]}" 2> >(tee "$log" >&2))" || fail "Vercel rejected the deploy — nothing was published" "$log"
   [ -n "$url" ] || fail "Vercel finished but returned no URL" "$log"
+  vc stat_add "$pid"
   if [ "$PROD" = yes ]; then
     domain="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)"; [ -n "$domain" ] && [ "${domain#ERR}" = "$domain" ] && url="https://$domain"
   fi
@@ -989,7 +1123,7 @@ main(){
     refresh
   fi
 
-  local h lb rc fbsite vid names rank why best rcseen kind=() grp lines g
+  local h lb rc fbsite vid names rank why best rcseen kind=() grp lines g pj cnt last pc pgrp ind st
   # what this folder says about where it deploys: its .firebaserc, firebase.json, .vercel/project.json, and its names
   rc=""; fbsite=""; vid=""; names=""
   if [ -n "$ROOT" ]; then
@@ -1001,13 +1135,19 @@ main(){
     # rank each project against this folder (0 path, 1 config, 2 name, 9 none), then group by account and host;
     # the group holding the best match comes first, then Vercel, then Firebase
     lines="$(vc landing | rank_rows "$ROOT" "$rc" "$fbsite" "$vid" "$names")"
-    grp=""; local ga="" gh=""
-    while IFS=$'\x1f' read -r a id nm u f h lb rank why; do
+    grp=""; pgrp=""; local ga="" gh=""
+    while IFS=$'\x1f' read -r a id nm u f h lb pj cnt last rank why pc; do
       [ -n "$id" ] || continue
       g="$a · $([ "$h" = firebase ] && echo Firebase || echo Vercel)"
       if [ "$g" != "$grp" ]; then
         [ -n "$grp" ] && { MENU_ITEMS+=("  + new project here"); MENU_NOTES+=("  ${D}in ${grp}${R}"); kind+=("newin"$'\x1f'"$gh"$'\x1f'"$ga"); }
-        MENU_ITEMS+=($'\x01'"$g"); MENU_NOTES+=(""); kind+=(head); grp="$g"; ga="$a"; gh="$h"
+        MENU_ITEMS+=($'\x01'"$g"); MENU_NOTES+=(""); kind+=(head); grp="$g"; ga="$a"; gh="$h"; pgrp=""
+      fi
+      # a Firebase project with several sites shows them under its own line, so two sites read as one project
+      ind=""
+      if [ "$h" = firebase ] && [ "${pc:-1}" -gt 1 ]; then
+        ind="  "
+        [ "${id%%/*}" != "$pgrp" ] && { pgrp="${id%%/*}"; MENU_ITEMS+=($'\x01'"  ${pj:-$pgrp}  ${D}${pgrp} · ${pc} sites${R}"); MENU_NOTES+=(""); kind+=(head); }
       fi
       [ "$h" = firebase ] && [ -n "$rc" ] && [ "${id%%/*}" = "$rc" ] && rcseen=yes
       rows+=("$a"$'\x1f'"$id"$'\x1f'"$nm"$'\x1f'"$f"$'\x1f'"$h")
@@ -1016,19 +1156,21 @@ main(){
         note="  ${G}● ${why}${R}"
         [ "$rank" -lt "$best" ] && { best=$rank; sel=${#MENU_ITEMS[@]}; }
       elif [ -n "$f" ]; then note="  ${D}$(sed "s|^$HOME|~|" <<<"$f")${R}"; fi
-      MENU_ITEMS+=("  $(printf '%-24s' "${lb:-$nm}")"); MENU_NOTES+=("  ${D}$(printf '%-32s' "$u")${R}$note"); kind+=("row:$(( ${#rows[@]} - 1 ))")
+      st=""; [ -n "$cnt" ] && st="${cnt}× · ${last}"
+      MENU_ITEMS+=("  ${ind}$(printf '%-24s' "${lb:-$nm}")"); MENU_NOTES+=("  ${D}$(printf '%-32s %-13s' "$u" "$st")${R}$note"); kind+=("row:$(( ${#rows[@]} - 1 ))")
     done <<<"$lines"
     [ -n "$grp" ] && { MENU_ITEMS+=("  + new project here"); MENU_NOTES+=("  ${D}in ${grp}${R}"); kind+=("newin"$'\x1f'"$gh"$'\x1f'"$ga"); }
     [ ${#rows[@]} -gt 0 ] && { MENU_ITEMS+=($'\x01'); MENU_NOTES+=(""); kind+=(head); }   # a blank line sets the actions apart
-    MENU_ITEMS+=("  + new project" "  label a project" "  accounts" "  refresh" "  quit")
-    MENU_NOTES+=("  ${D}a Vercel project or a Firebase site, by name${R}" "  ${D}your own name for one, e.g. the domain it serves${R}"
+    MENU_ITEMS+=("  + new project" "  label a project" "  custom domain" "  accounts" "  refresh" "  quit")
+    MENU_NOTES+=("  ${D}a Vercel project or a Firebase site, by name${R}" "  ${D}your own name for one: admin, landing, the domain it serves${R}"
+                 "  ${D}connect your own domain to a Firebase site; shows the DNS records to add${R}"
                  "  ${D}Vercel and Firebase: add, remove, sign in again${R}" "  ${D}fetch the project list again${R}" "")
-    kind+=(new label accounts refresh quit)
+    kind+=(new label domain accounts refresh quit)
     [ "$sel" -ge 0 ] || sel=0
     step "Projects"
     [ -n "$ROOT" ] && sub "you are in $(sed "s|^$HOME|~|" <<<"$ROOT")"
     [ -n "$rc" ] && [ "$rcseen" = no ] && sub "${Y}this folder's .firebaserc names Firebase project “${rc}”, which none of your signed-in accounts can see — add its Google account under accounts${R}"
-    MENU_FIXED=$([ ${#rows[@]} -gt 0 ] && echo 6 || echo 5)   # the actions stay on screen; only the projects scroll
+    MENU_FIXED=$([ ${#rows[@]} -gt 0 ] && echo 7 || echo 6)   # the actions stay on screen; only the projects scroll
     MENU_NOKEY=""; for i in "${!kind[@]}"; do case "${kind[$i]}" in row:*) MENU_NOKEY="$MENU_NOKEY $i" ;; esac; done
     idx="$(menu_pick "Pick one to publish" "$sel")"; MENU_FIXED=0; MENU_NOKEY=""   # set for that menu only; it ran in a subshell
     case "${kind[$idx]}" in
@@ -1039,16 +1181,20 @@ main(){
          IFS=$'\t' read -r h a id nm <<<"$r"
          [ "$DRY" = yes ] || { vc proj_set "$folder" account "$a"; vc proj_set "$folder" id "$id"; vc proj_set "$folder" name "$nm"; vc proj_set "$folder" host "$h"; }
          deploy "$a" "$id" "$nm" "$folder" "$h"; exit 0 ;;
-      label)
-         [ ${#rows[@]} -gt 0 ] || { warn "no projects to label yet"; continue; }
-         local ids=() k; MENU_ITEMS=(); MENU_NOTES=()
-         for k in "${rows[@]}"; do IFS=$'\x1f' read -r a id nm f h <<<"$k"; ids+=("$id"); MENU_ITEMS+=("$(printf '%-28s' "$nm")"); MENU_NOTES+=("  ${D}$(vc label_get "$id")${R}"); done
+      label|domain)
+         [ ${#rows[@]} -gt 0 ] || { warn "no projects yet"; continue; }
+         local k; MENU_ITEMS=(); MENU_NOTES=()
+         for k in "${rows[@]}"; do IFS=$'\x1f' read -r a id nm f h <<<"$k"; MENU_ITEMS+=("$(printf '%-28s' "$nm")"); MENU_NOTES+=("  ${D}$(vc label_get "$id")${R}"); done
          MENU_ITEMS+=("← back"); MENU_NOTES+=("")
-         step "Label which project"
+         step "$([ "${kind[$idx]}" = label ] && echo 'Label which project' || echo 'Custom domain for which site')"
          MENU_NOKEY="$(nokey_rows "${#rows[@]}")"
-         idx="$(menu_pick "Project" 0)"; MENU_NOKEY=""
+         r="${kind[$idx]}"; idx="$(menu_pick "Project" 0)"; MENU_NOKEY=""
          [ "$idx" -lt ${#rows[@]} ] || continue
          IFS=$'\x1f' read -r a id nm f h <<<"${rows[$idx]}"
+         if [ "$r" = domain ]; then
+           [ "$h" = firebase ] || { warn "Vercel domains are added on vercel.com › the project › Domains, which shows the records to add"; continue; }
+           custom_domain "$a" "$id" "$nm"; continue
+         fi
          vc label_set "$id" "$(ask "Label for ${nm} (blank removes it)" "$(vc label_get "$id")")"
          ok "saved — only a name for you, nothing changes on $([ "$h" = firebase ] && echo Firebase || echo Vercel)"
          continue ;;

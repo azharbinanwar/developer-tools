@@ -16,7 +16,7 @@ if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null |
   B=$(tput bold); D=$(tput dim); R=$(tput sgr0)
   A=$(tput setaf 6); G=$(tput setaf 2); Y=$(tput setaf 3); E=$(tput setaf 1)
 else B=; D=; R=; A=; G=; Y=; E=; fi
-VERSION="2.0.0-beta.4"
+VERSION="2.0.0-beta.5"
 # ── platform ──────────────────────────────────────────────────────────────
 # macOS, Linux and Windows (Git Bash or WSL) differ in a few commands; everything platform-specific goes through these.
 case "$(uname -s 2>/dev/null)" in Darwin) OS=mac ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS=linux ;; esac
@@ -109,10 +109,24 @@ if not os.path.exists(path):
 def proj(key):
     return d["projects"].setdefault(key, {"path": "", "app": "", "app_id": "", "user_id": "", "key": "", "to": [], "bcc": []})
 
-if op == "projects":
+def ago(t):  # epoch -> "today", "3d ago", "2mo ago"; "" for none
+    import time
+    if not t: return ""
+    d_ = (int(time.time()) - int(t)) // 86400
+    if d_ < 1: return "today"
+    if d_ < 7: return "%dd ago" % d_
+    if d_ < 30: return "%dw ago" % (d_ // 7)
+    if d_ < 365: return "%dmo ago" % (d_ // 30)
+    return "%dy ago" % (d_ // 365)
+
+if op == "projects":   # key path app app_id people count last
     for k in sorted(d["projects"]):
         p = d["projects"][k]
-        print("\x1f".join([k, p.get("path", ""), p.get("app", ""), p.get("app_id", ""), str(len(p.get("to", [])))]))
+        print("\x1f".join([k, p.get("path", ""), p.get("app", ""), p.get("app_id", ""), str(len(p.get("to", []))),
+                           str(p.get("count", "") or ""), ago(p.get("last"))]))
+elif op == "stat_add":   # key -> one more build shipped, now
+    import time
+    p = proj(a[0]); p["count"] = p.get("count", 0) + 1; p["last"] = int(time.time()); save()
 elif op == "proj_get":   print(d["projects"].get(a[0], {}).get(a[1], ""))
 elif op == "proj_set":   proj(a[0])[a[1]] = a[2]; save()
 elif op == "proj_del":   d["projects"].pop(a[0], None); save()
@@ -320,18 +334,19 @@ ask_yn(){ local r d; [ "$2" = true ] && d="yes" || d="no"
 PROJ_KEYS=(); PROJ_PATHS=()
 HIT=-1
 load_projects(){ # $1 current folder (optional) -> fills the app rows; HIT = row of that folder's app, or -1
-  local here="${1:-}" note mail k path app id n
+  local here="${1:-}" note mail k path app id n cnt last st
   HIT=-1
   PROJ_KEYS=(); PROJ_PATHS=(); MENU_ITEMS=(); MENU_NOTES=()
-  while IFS=$'\x1f' read -r k path app id n; do   # \x1f, not a tab: bash collapses empty tab fields
+  while IFS=$'\x1f' read -r k path app id n cnt last; do   # \x1f, not a tab: bash collapses empty tab fields
     [ -n "$k" ] || continue
     PROJ_KEYS+=("$k"); PROJ_PATHS+=("$path")
     if   [ -n "$here" ] && [ "$path" = "$here" ]; then note="  ${G}● this folder${R}"; HIT=$(( ${#PROJ_KEYS[@]} - 1 ))
     elif [ ! -d "$path" ]; then note="  ${Y}folder missing${R}"
     else note="  ${D}$(sed "s|^$HOME|~|" <<<"$path")${R}"; fi
     [ "$n" -gt 0 ] && mail="$n $([ "$n" = 1 ] && echo person || echo people)" || mail="no mail"
+    st=""; [ -n "$cnt" ] && st="${cnt}× · ${last}"
     MENU_ITEMS+=("$(printf '%-22s' "${app:-$k}")")
-    MENU_NOTES+=("  ${D}$(printf '%-12s %-11s' "${id:0:10}" "$mail")${R}$note")
+    MENU_NOTES+=("  ${D}$(printf '%-12s %-11s %-13s' "${id:0:10}" "$mail" "$st")${R}$note")
   done < <(cfg projects)
 }
 
@@ -751,7 +766,7 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
     MENU_ITEMS=("retry the upload" "back to apps" "quit"); MENU_NOTES=("  ${D}same APK, no rebuild${R}" "" "")
     case "$(menu_pick "Upload did not finish" 2 0)" in 1) return 0 ;; 2) return 1 ;; esac
   done
-  cfg proj_set "$key" last_version "$version"; cfg proj_set "$key" last_date "$(date '+%d %b %H:%M')"
+  cfg proj_set "$key" last_version "$version"; cfg proj_set "$key" last_date "$(date '+%d %b %H:%M')"; cfg stat_add "$key"
 
   if [ "$want_mail" = no ]; then
     log_send "$key" "$version" "$UPLOAD_LINK" "0 (link only)"

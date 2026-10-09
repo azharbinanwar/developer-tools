@@ -36,24 +36,33 @@ ship-site -v           version
 
 ```
 ▸ Projects
-   you are in ~/Desktop/mine/rig-register-web
- ❯ rig-register-web       Vercel   Mohsin Dev     rig-register-web.vercel.app   ● this folder
-   thoub.app              Firebase azhar@…        thoub-web.web.app
-   advisor-app-a63c2      Firebase azhar@…        advisor-app-a63c2.web.app
-   studiodesk             Vercel   Mohsin Dev     studiodesk-chi.vercel.app
-   + new project
-   label a project
-   accounts
-   refresh
-   quit
+   you are in ~/Desktop/mine/SukunGardenAdmin
+   Mohsin Dev · Vercel
+ ❯ [1]  rig-register-web     rig-register-web.vercel.app   12× · 3d ago
+   [2]  studiodesk           studiodesk.com                 2× · 2mo ago
+        + new project here
+   mohsin@… · Firebase
+        Sukun Garden  sukun-garden · 2 sites
+   [3]    admin              admin.sukungarden.com          5× · today   ● this folder
+   [4]    landing            sukun-garden.web.app           1× · 1w ago
+   [5]  advisor-app-a63c2    advisor-app-a63c2.web.app
+        + new project here
+
+   [n]  + new project
+   [l]  label a project
+   [d]  custom domain
+   [a]  accounts
+   [r]  refresh
+   [q]  quit
 ```
 
-Every Vercel project and Firebase site across all your accounts. The list opens from a local cache at once and is refreshed when it is older than 10 minutes, or with **refresh**. Each Firebase project shows its default hosting site; extra sites appear once you create them through **+ new project**. Projects you have built from this Mac come first. Inside a project folder, the one it publishes to is preselected; a folder set up with the Firebase CLI before gets its `.firebaserc` project preselected the first time, no searching. Expired Vercel sign-ins are renewed on their own.
+Every Vercel project and Firebase site across all your accounts, grouped by account. A Firebase project with several sites shows them under its own line. Each row shows the address it serves (your own domain once it is connected, else the host's), how many times you published it from this Mac and when last. The list opens from a local cache at once and is refreshed when it is older than 10 minutes, or with **refresh**. Each Firebase project shows its default hosting site; extra sites appear once you create them through **+ new project**. Projects you have built from this Mac come first. Inside a project folder, the one it publishes to is preselected; a folder set up with the Firebase CLI before gets its `.firebaserc` project preselected the first time, no searching. Expired Vercel sign-ins are renewed on their own.
 
 For Firebase, nothing has to be set up in your repo: no `firebase init`, no `firebase.json`. Sign in once, pick or create a project, publish.
 
-- **+ new project**: a Vercel project, or a Firebase site — inside one of your existing Firebase projects (`<name>.web.app`), or in a brand-new Firebase project made from just a name (free plan, Hosting only, no billing). With no account on that host yet, it signs you in first. It asks which account only when you have more than one.
-- **label a project**: your own name for it, such as the domain it serves (`thoub.app`). Shown in the list and when publishing; it changes nothing on Vercel or Firebase.
+- **+ new project**: a Vercel project, or a Firebase site — inside one of your existing Firebase projects (`<name>.web.app`), or in a brand-new Firebase project made from just a name (free plan, Hosting only, no billing). The name you type is cleaned to what the host allows (`Admin.Sukun Garden` → `admin-sukun-garden`) and shown back as **create admin-sukun-garden.web.app** before anything is made; **change the name** asks again. With no account on that host yet, it signs you in first. It asks which account only when you have more than one. One Firebase project can hold several sites on the free plan: a landing page on `sukun-garden.web.app` and the admin on `sukun-garden-admin.web.app`, say.
+- **label a project**: your own name for it: `admin`, `landing`, the domain it serves. Shown in the list and when publishing; it changes nothing on Vercel or Firebase. The first time a folder publishes to a project, a label is suggested from the folder name (`SukunGardenAdmin` → `admin`); Enter takes it, type your own, or leave it blank.
+- **custom domain**: connect your own domain or subdomain (`sukungarden.com`, `admin.sukungarden.com`) to a Firebase site. It prints the DNS records to add at your registrar and copies them; Firebase checks them on its own, and once the domain answers the list shows it in place of `<site>.web.app` and the published link uses it. Vercel domains are added on vercel.com, which shows its records there.
 - **accounts**: add or remove Vercel accounts (browser sign-in or a pasted token, then the team scope) and Firebase accounts (Google sign-in in the browser). With no account yet, it starts by adding one.
 
 ### Several accounts
@@ -98,6 +107,8 @@ The link is printed and copied. For the main website it is the project's domain.
 | Step | In a dry run |
 | --- | --- |
 | project list, refresh | ✅ runs (read-only) |
+| new project or site name | ✅ asked and shown back; ⏭ not created |
+| custom domain | ⏭ says what it would connect |
 | add or remove an account | ✅ runs |
 | new Vercel project | ⏭ says it would create it |
 | version | ⏭ shows the new version, does not touch `package.json` |
@@ -119,6 +130,9 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 | --- | --- | --- |
 | `n` | new project | `project.new` |
 | `l` | label a project | `project.label` |
+| `d` | custom domain | `project.domain` |
+| `c` | create (a new project or site, after its name is shown) | `new.create` |
+| `e` | change the name | `new.rename` |
 | `a` | accounts | `accounts` |
 | `r` | refresh | `refresh` |
 | `q` | quit | `quit` |
@@ -150,7 +164,7 @@ bash, python3 and node on macOS, Linux or Windows (Git Bash or WSL), plus the CL
 
 | What | Where |
 | --- | --- |
-| Accounts, scopes, project list, labels, which project each folder uses, last published version | `~/.config/ship-site/config.json` (mode 0600) |
+| Accounts, scopes, project list, labels, which project each folder uses, publish counts and dates, last published version | `~/.config/ship-site/config.json` (mode 0600) |
 | Each Vercel account's sign-in | `~/.config/ship-site/accounts/<name>/` (mode 0700) |
 | Firebase sign-ins | the Firebase CLI's own store (`firebase login:list`) |
 | Your normal `vercel login` | untouched |

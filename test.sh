@@ -99,6 +99,9 @@ ANS
   cfg proj_set empty app E
   check "mail: no recipients → NO_RECIPIENTS" is "$(send_mail empty E 1 l n yes)" NO_RECIPIENTS
   cfg proj_del demo; cfg proj_del empty
+  cfg proj_set stat path /tmp/stat; cfg stat_add stat; cfg stat_add stat; cfg stat_add stat
+  check "stats: count and last date on the app row" is "$(cfg projects | grep '^stat' | cut -d$'\x1f' -f6,7 | tr $'\x1f' ' ')" "3 today"
+  cfg proj_del stat
   check "cfg: delete"                         is "$(cfg projects)" ""
 
   p="$(mktemp -d)"; mkdir -p "$p/lib/sub"; printf 'name: x\nversion: 1.2.3+45\n' > "$p/pubspec.yaml"
@@ -300,7 +303,17 @@ echo "── ship-site"
   check "vc: bad token → ERR line"            grep -q "^ERR" <<<"$(vc user not-a-token 2>/dev/null || true)"
   check "vc: bad token exits non-zero"        not vc user not-a-token
   vc cache_add me prj_9 site-a site-a.vercel.app; vc proj_set /tmp/site-a id prj_9
-  check "landing: cached row with its folder" is "$(vc landing)" $'me\x1fprj_9\x1fsite-a\x1fsite-a.vercel.app\x1f/tmp/site-a\x1fvercel\x1f'
+  check "landing: cached row with its folder" is "$(vc landing)" $'me\x1fprj_9\x1fsite-a\x1fsite-a.vercel.app\x1f/tmp/site-a\x1fvercel\x1f\x1f\x1f\x1f'
+  vc stat_add prj_9; vc stat_add prj_9
+  check "stats: count and last date on the row" is "$(vc landing | cut -d$'\x1f' -f9,10 | tr $'\x1f' ' ')" "2 today"
+  check "stats: stat_get"                       is "$(vc stat_get prj_9 | tr '\t' ' ')" "2 today"
+  check "stats: none is blank"                  is "$(vc stat_get nothing | tr '\t' ' ')" "0 "
+  check "url_get: the cached url"               is "$(vc url_get prj_9)" site-a.vercel.app
+  check "fb_token: nothing without a CLI login" is "$(vc fb_token a@x.com)" ""
+  mkdir -p "$HOME/.config/configstore"; printf '{"user":{"email":"a@x.com"},"tokens":{"access_token":"tokA","expires_at":%s},"additionalAccounts":[{"user":{"email":"b@x.com"},"tokens":{"access_token":"tokB","expires_at":%s}}]}' "$(( ($(date +%s) + 3600) * 1000 ))" "$(( ($(date +%s) - 10) * 1000 ))" > "$HOME/.config/configstore/firebase-tools.json"
+  check "fb_token: the default account's token" is "$(vc fb_token a@x.com)" tokA
+  check "fb_token: an expired token is nothing" is "$(vc fb_token b@x.com)" ""
+  rm -f "$HOME/.config/configstore/firebase-tools.json"
   vc label_set prj_9 "site-a.com"
   check "label: saved and shown on the row"   is "$(vc landing | cut -d$'\x1f' -f7)" site-a.com
   vc label_set prj_9 ""
@@ -409,7 +422,7 @@ FAKE
 m${US}prj_v2${US}my-app${US}my-app.vercel.app${US}${US}vercel${US}
 g@x${US}shop-1/shop-1${US}shop-1${US}shop-1.web.app${US}${US}firebase${US}
 g@x${US}other/other${US}other${US}other.web.app${US}/the/folder${US}firebase${US}"
-  rr(){ rank_rows "$@" <<<"$landing" | cut -d"$US" -f3,8 | tr "$US" ' '; }
+  rr(){ rank_rows "$@" <<<"$landing" | cut -d"$US" -f3,11 | tr "$US" ' '; }
   check "rank: saved folder path wins"             grep -qx "other 0" <<<"$(rr /the/folder "" "" "" "")"
   check "rank: .firebaserc project is config"      grep -qx "shop-1 1" <<<"$(rr /x shop-1 "" "" "")"
   check "rank: firebase.json site is config"       grep -qx "shop-1 1" <<<"$(rr /x "" shop-1 "" "")"
@@ -418,6 +431,18 @@ g@x${US}other/other${US}other${US}other.web.app${US}/the/folder${US}firebase${US
   check "rank: nothing matches"                    is "$(rr /x "" "" "" "zzz" | cut -d' ' -f2 | sort -u)" 9
   check "rank: a project linked to another folder never matches" grep -qx "other 9" <<<"$(rr /x other "" "" "other")"
   check "rank: the best match's group comes first" is "$(rank_rows /x shop-1 "" "" "" <<<"$landing" | head -1 | cut -d"$US" -f6)" firebase
+  two="g@x${US}shop-1/shop-1${US}shop-1${US}shop-1.web.app${US}${US}firebase${US}${US}Shop
+g@x${US}other/other${US}other${US}other.web.app${US}${US}firebase${US}
+g@x${US}shop-1/shop-admin${US}shop-admin${US}shop-admin.web.app${US}${US}firebase${US}${US}Shop"
+  check "sites: a project's sites stay together"   is "$(rank_rows /x "" "" "" "" <<<"$two" | cut -d"$US" -f3 | tr '\n' ' ')" "shop-1 shop-admin other "
+  check "sites: each row knows its project's size" is "$(rank_rows /x "" "" "" "" <<<"$two" | cut -d"$US" -f13 | tr '\n' ' ')" "2 2 1 "
+  check "label guess: admin from the folder"       is "$(guess_label /x/SukunGardenAdmin)" admin
+  check "label guess: landing from a web folder"   is "$(guess_label /x/sukun-garden-web)" landing
+  check "label guess: nothing from a plain name"   is "$(guess_label /x/thoub)" ""
+  check "name: cleaned and confirmed"              is "$(confirm_name "Site" "" "NAME.web.app" <<<$'Admin.Sukun Garden\n\n')" admin-sukun-garden
+  check "name: change the name asks again"         is "$(confirm_name "Site" "" "NAME.web.app" <<<$'first\nesecond\n\n')" second
+  check "name: back gives nothing"                 is "$(confirm_name "Site" "" "NAME.web.app" <<<$'first\n\e')" ""
+  check "name: blank backs out"                    not confirm_name "Site" "" "NAME.web.app" <<<$'\n'
 
   # build output folder and Firebase staging
   check "outdir: dist first"                      is "$(outdir "$p")" dist
@@ -458,8 +483,13 @@ FAKE
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=yes; PROD=""; printf "m\n" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "deploy dry: main website skips the y-confirm in a dry run" grep -q "firebase deploy --only hosting" <<<"$out"
   # the y-confirm guards a real main-website publish picked by a single key
-  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "mx" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "admin\nmx" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  check "deploy: first link from a folder asks for a label"  grep -q "Label for shop-1" <<<"$out"
+  check "deploy: the label is saved"                         is "$(vc label_get shop-1/shop-1)" admin
   check "deploy: main website by key, then not y → cancelled" grep -q "cancelled — nothing was published" <<<"$out"
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "mx" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  check "deploy: a linked folder is not asked again"         not grep -q "Label for" <<<"$out"
+  check "deploy: the label heads the screen"                 grep -q "admin" <<<"$out"
   # cache: a young cache skips the refresh, a stale one runs it
   vc stamp; check "refresh fresh: young cache returns at once" bash -c "source ./ship-site/ship-site; refresh fresh; [ \"\$(vc age)\" -lt 5 ]"
   # removed Firebase account disappears from the list

@@ -34,15 +34,15 @@ ship-apk -v           version
 
 ```
 ▸ Apps
- ❯ Thoub                   E4FW48PjtX   1 person     ● this folder
-   Reg Register            Nh8IpVYIVA   no mail      ~/Desktop/mine/rig_register
+ ❯ Thoub                   E4FW48PjtX   1 person    14× · today    ● this folder
+   Reg Register            Nh8IpVYIVA   no mail      3× · 2w ago   ~/Desktop/mine/rig_register
    + add app
    edit an app
    mailbox
    quit
 ```
 
-Inside an app's folder, that app is preselected. Inside a Flutter folder nobody saved yet, **+ add this app** is preselected with the folder filled in. Adding asks for the app name, the appho.st app id, `user_id` and API key, all from the app's page on appho.st › Private API › download config.
+Each row shows the app id, who gets the mail, how many builds you shipped from this Mac and when last. Inside an app's folder, that app is preselected. Inside a Flutter folder nobody saved yet, **+ add this app** is preselected with the folder filled in. Adding asks for the app name, the appho.st app id, `user_id` and API key, all from the app's page on appho.st › Private API › download config.
 
 ### 2. Version
 
@@ -174,7 +174,7 @@ bash, python3 and curl (built in on macOS and Linux; Git Bash plus Python on Win
 
 | What | Where |
 | --- | --- |
-| Apps, credentials, mailbox, template, last shipped version | `~/.config/ship-apk/config.json` (mode 0600) |
+| Apps, credentials, mailbox, template, ship counts and dates, last shipped version | `~/.config/ship-apk/config.json` (mode 0600) |
 | Build and send logs | `~/.config/ship-apk/logs/` |
 
 The only file it ever changes in your project is the `version:` line of `pubspec.yaml`, and only when you pick **bump**. The free appho.st tier rejects APKs over 100 MB; you are warned before the upload.
