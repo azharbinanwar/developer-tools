@@ -526,7 +526,7 @@ FAKE
   check "deploy: the label heads the screen"                 grep -q "▸ admin" <<<"$out"
   out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "dadmin.shop.dev\nr\e" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
   check "publish-to: custom domain saved from that screen"   is "$(vc domain_get shop-1/shop-1)" admin.shop.dev
-  check "publish-to: the screen redraws with the domain"     grep -q "DNS pending" <<<"$out"
+  check "publish-to: the screen redraws with the domain"     grep -q "waiting for DNS" <<<"$out"
   check "publish-to: main website names the domain"          grep -q "web.app and admin" <<<"$out"
   vc domain_set shop-1/shop-1 ""
   check "swap: another folder on the same site is warned and backs out" not bash -c 'source ./ship-site/ship-site; DRY=no; PROD=""; printf "tn" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p2"

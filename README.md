@@ -95,7 +95,7 @@ From then on `developer-tools install` keeps you on the newest beta. Back to sta
 developer-tools stable install
 ```
 
-`ship-site -v` shows a beta as `2.0.0-beta.6`. The tools are the same files on both channels; only which release you get differs.
+`ship-site -v` shows a beta as `2.1.0-beta.1`. The tools are the same files on both channels; only which release you get differs.
 
 ### Which one?
 
