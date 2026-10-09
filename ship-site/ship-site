@@ -230,7 +230,7 @@ elif op == "stat_add":  # id -> one more publish, now
 elif op == "stat_get":  st = d.get("stats", {}).get(a[0], {}); print("%s\t%s" % (st.get("count", 0), ago(st.get("last"))))
 elif op == "fb_token":  print(cli_token(a[0]))
 elif op == "url_get":   print(next((c["url"] for c in d.get("cache", []) if c["id"] == a[0]), ""))
-elif op == "fb_domain":  # token project site domain -> the DNS records to add, type<TAB>host<TAB>value; connects the domain to the site first
+elif op in ("fb_domain", "fb_records"):  # token project site domain -> the DNS records to add, type<TAB>host<TAB>value; fb_domain connects it first
     import time
     base = "https://firebasehosting.googleapis.com/v1beta1/projects/%s/sites/%s/customDomains" % (a[1], a[2])
     def call(ep, method="GET", body=None):
@@ -242,10 +242,11 @@ elif op == "fb_domain":  # token project site domain -> the DNS records to add, 
             try: msg = json.loads(e.read()).get("error", {}).get("message", str(e))
             except Exception: msg = str(e)
             if e.code == 409: return {}   # connected already: just read its records
+            if e.code == 404: raise ApiErr("not connected on Firebase yet")
             raise ApiErr(msg)
         except urllib.error.URLError as e: raise ApiErr("cannot reach Firebase: %s" % e.reason)
-    call("?customDomainId=" + a[3], "POST", {})
-    for _ in range(15):
+    if op == "fb_domain": call("?customDomainId=" + a[3], "POST", {})
+    for _ in range(15 if op == "fb_domain" else 1):
         cd = call("/" + a[3])
         recs = [r for g in (cd.get("requiredDnsUpdates") or {}).get("desired", []) for r in g.get("records", [])]
         recs += [r for g in ((cd.get("cert") or {}).get("verification") or {}).get("dns", {}).get("desired", []) for r in g.get("records", [])]
@@ -1031,6 +1032,7 @@ publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
   row "link" "${B}${A}${url}${R}  ${D}copied${R}"
   [ -n "$also" ] && row "also" "${also}  ${D}stays as is${R}"
   URL="$url"; ALSO="$also"
+  pending_records "$acct" "${proj}/${site}"
 }
 
 custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  $4 name -> saves the domain; on Firebase connects it and prints the DNS records to add
@@ -1048,17 +1050,25 @@ custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  
   [ "$DRY" = yes ] && { ok "would remember ${dom} for ${4}$([ "$host" = firebase ] && echo ", connect it and show the DNS records to add")  ${D}(dry run, nothing saved)${R}"; return 0; }
   vc domain_set "$3" "$dom"; ok "remembered ${dom} for ${4} — it shows on its row$([ "$host" = firebase ] && echo ' as DNS pending until it answers')"
   [ "$host" = firebase ] || { sub "add it on vercel.com › ${4} › Domains, which shows the records to add"; return 0; }
-  MENU_ITEMS=("connect it now" "just keep it as a reminder"); MENU_NOTES=("  ${D}on Firebase, then the DNS records to add at your registrar${R}" "  ${D}connect it another time from the list: custom domain${R}")
+  MENU_ITEMS=("connect it now" "just keep it as a reminder"); MENU_NOTES=("  ${D}on Firebase, then the DNS records to add at your registrar; connected already: shows them again${R}" "  ${D}connect it another time from the list: custom domain${R}")
   [ "$(menu_pick "Firebase" 0)" = 0 ] || return 0
   need_firebase
-  tok="$(vc fb_token "$acct")"
-  [ -n "$tok" ] || { firebase projects:list --account "$acct" >/dev/null 2>&1; tok="$(vc fb_token "$acct")"; }
+  tok="$(fb_token_for "$acct")"
   [ -n "$tok" ] || { warn "no Firebase login for ${acct} on this Mac — sign in again under accounts"; return 1; }
   cmd "firebasehosting.googleapis.com … sites/${site}/customDomains/${dom}"
   out="$(vc fb_domain "$tok" "$proj" "$site" "$dom")" || { warn "${out#ERR	}"; return 1; }
-  if [ "${out%%	*}" = live ]; then ok "${dom} is connected already — no records to add"; vc fb_refresh 2>/dev/null; return 0; fi
+  show_records "$proj" "$site" "$dom" "$out"
+}
+fb_token_for(){ # $1 account -> the CLI's token, renewing it with one harmless CLI call when it has expired
+  local tok; tok="$(vc fb_token "$1")"
+  [ -n "$tok" ] || { firebase projects:list --account "$1" >/dev/null 2>&1; tok="$(vc fb_token "$1")"; }
+  printf '%s' "$tok"
+}
+show_records(){ # $1 project $2 site $3 domain $4 records (type<TAB>host<TAB>value lines, or "live…") -> the table, copied
+  local proj="$1" site="$2" dom="$3" out="$4" t h v text="" base
+  if [ "${out%%	*}" = live ]; then ok "${dom} is connected and live — nothing to add"; vc fb_refresh 2>/dev/null; return 0; fi
   # the registrar wants the host without the domain: admin for admin.example.com, @ for example.com itself
-  local base; base="$(printf '%s' "$dom" | awk -F. '{print $(NF-1)"."$NF}')"
+  base="$(printf '%s' "$dom" | awk -F. '{print $(NF-1)"."$NF}')"
   step "Add these records at your registrar (Namecheap: Advanced DNS)  ${D}for ${base}${R}"
   printf "     ${D}%-6s %-34s %s${R}\n" type host value >&2
   while IFS=$'\t' read -r t h v; do
@@ -1071,8 +1081,16 @@ custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  
   printf '%s' "$text" | clip 2>/dev/null && sub "copied — host is the part before ${base}; @ is ${base} itself"
   sub "Firebase checks them on its own; the site answers on ${dom} once they are live, usually within an hour, sometimes a day"
   sub "https://console.firebase.google.com/project/${proj}/hosting/sites/${site}"
-  sub "once it answers, the list shows ${dom} in place of ${site}.web.app (refresh)"
+  sub "shown again after every publish until it is live; the list then shows ${dom} in place of ${site}.web.app"
   printf "\n" >&2
+}
+pending_records(){ # $1 account $2 project/site -> after a publish: the records still to add for a saved domain that is not live yet
+  local acct="$1" proj="${2%%/*}" site="${2#*/}" dom tok out
+  dom="$(vc domain_get "$2")"; [ -n "$dom" ] || return 0
+  [ "$(vc url_get "$2")" = "$dom" ] && return 0
+  tok="$(fb_token_for "$acct")"; [ -n "$tok" ] || return 0
+  if out="$(vc fb_records "$tok" "$proj" "$site" "$dom")"; then show_records "$proj" "$site" "$dom" "$out"
+  else warn "${dom} is saved but ${out#ERR	} — custom domain › connect it now"; fi
 }
 
 # ── deploy ────────────────────────────────────────────────────────────────

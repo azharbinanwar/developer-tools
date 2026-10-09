@@ -569,6 +569,12 @@ FAKE
   check "domain: a missing ending is questioned"             not bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nn" | custom_domain firebase a@x.com shop-1/shop-1 shop-1'
   out="$(bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nn" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' 2>&1 || true)"
   check "domain: the question names the missing .com"        grep -q "needs its .com" <<<"$out"
+  out="$(bash -c 'source ./ship-site/ship-site; show_records shop-1 shop-1 admin.example.com "$(printf "CNAME\tadmin.example.com\tshop-1.web.app\nTXT\t_acme-challenge.admin.example.com\tabc\nA\texample.com\t1.2.3.4")"' 2>&1)"
+  check "records: host shown the registrar's way"           grep -q "CNAME  admin  " <<<"$out"
+  check "records: _acme-challenge host kept short"           grep -q "_acme-challenge.admin" <<<"$out"
+  check "records: @ for the domain itself"                   grep -q "A      @" <<<"$out"
+  check "records: live means nothing to add"                 grep -q "connected and live" <<<"$(bash -c 'source ./ship-site/ship-site; show_records shop-1 shop-1 a.example.com "live	HOST_ACTIVE"' 2>&1)"
+  check "pending: nothing without a saved domain"            is "$(bash -c 'source ./ship-site/ship-site; pending_records a@x.com shop-1/shop-1' 2>&1)" ""
   check "domain: y keeps an odd ending"                      bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nyr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' && [ "$(vc domain_get shop-1/shop-1)" = admin.sukungarden ]
   vc domain_set shop-1/shop-1 ""; vc domain_set prj_9 ""
   # cache: a young cache skips the refresh, a stale one runs it
