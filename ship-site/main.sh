@@ -1,4 +1,4 @@
-# needs: platform ui keys firebase vercel
+# needs: platform ui keys mail firebase vercel
 # ship-site: build a web app, publish only its build folder to Vercel or Firebase Hosting, copy the link.
 #
 # One file. Accounts are named and signed in either with a token or through
@@ -16,8 +16,11 @@
 #
 # License: MIT.
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 CONF="$HOME/.config/ship-site"
+LOGS="$CONF/logs"
+MAIL_KIND=site; MAIL_VERB="publishes"; MAIL_THING="project"   # how lib/mail.sh talks about this tool
+mail_store(){ vc "$@"; }                                        # where this tool keeps who gets the mail: per project, under "mail"
 CONFIG="$CONF/config.json"
 ACCTS="$CONF/accounts"
 
@@ -97,6 +100,8 @@ def pages(token, team, ep, key):
         out += r.get(key, [])
         until = r.get("pagination", {}).get("next")
         if not until: return out
+
+def mail(pid): return d.setdefault("mail", {}).setdefault(pid, {"to": [], "cc": [], "bcc": []})
 
 # config
 if   op == "accounts":  [print(n) for n in sorted(d["accounts"])]
@@ -216,6 +221,25 @@ elif op == "domain_set":  # id domain -> remembered at once, shown as pending un
     save()
 elif op == "domain_get": print(d.get("domains", {}).get(a[0], ""))
 elif op == "domain_state": print(d.get("domain_state", {}).get(a[0], ""))   # dns, cert or live, from the last refresh; "" when never seen
+# mail: who gets the link for a project, by project id; the mailbox itself is lib/mail.sh's mail.json
+elif op == "people":           # id [to|cc|bcc]
+    for r in mail(a[0]).get(a[1] if len(a) > 1 else "to", []):
+        print("%s\t%s" % (r.get("name") or r.get("email", "").split("@")[0], r.get("email", "")))
+elif op == "person_add":       # id name email [to|cc|bcc]
+    m = mail(a[0]); f = a[3] if len(a) > 3 else "to"
+    m[f] = [r for r in m.get(f, []) if r.get("email") != a[2]]; m[f].append({"name": a[1], "email": a[2]}); save()
+elif op == "person_del":       # id email [to|cc|bcc]
+    m = mail(a[0]); f = a[2] if len(a) > 2 else "to"
+    m[f] = [r for r in m.get(f, []) if r.get("email") != a[1]]; save()
+elif op == "subject_get":      print(d.get("mail", {}).get(a[0], {}).get("subject", ""))
+elif op == "subject_set":      mail(a[0])["subject"] = a[1]; save()
+elif op == "sha_get":          print(d.get("mail", {}).get(a[0], {}).get("last_sha", ""))
+elif op == "sha_set":          mail(a[0])["last_sha"] = a[1]; save()
+elif op == "mail_default_get": print(d.get("mail", {}).get(a[0], {}).get("default", ""))
+elif op == "mail_default_set": mail(a[0])["default"] = a[1]; save()
+elif op == "mail_json":
+    m = d.get("mail", {}).get(a[0], {})
+    print(json.dumps({f: m.get(f, []) for f in ("to", "cc", "bcc")} | {"subject": m.get("subject", "")}))
 elif op == "folder_of":  print(next((f for f, pr in sorted(d["projects"].items()) if pr.get("id") == a[0]), ""))
 elif op == "fb_accounts": [print(e) for e in d.get("fb_accounts", [])]
 elif op == "stamp":     import time; d["refreshed_at"] = int(time.time()); save()
@@ -266,6 +290,16 @@ the folder it was built from last time|folder.last|l
 remove it|account.remove|d
 sign it out|account.signout|d
 personal|scope.personal|p
+mailbox|mailbox|m
+email for this project|project.mail|e
+send the link|mail.send|s
+skip mail this time|mail.skip|x
+change to, cc, bcc or subject|mail.change|c
+set up mailbox|mail.setup_box|m
+set up this project's email|mail.setup_app|e
+use these|notes.use|u
+write my own|notes.write|w
+no notes|notes.none|x
 open the link in the browser|done.link|o
 check the domain again|domain.check|c
 label this project|done.label|l
@@ -552,7 +586,7 @@ dry_source(){ # $1 root $2 package manager -> says whether a build runs or files
 
 # ── deploy ────────────────────────────────────────────────────────────────
 deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 folder  $5 host (vercel|firebase)
-  local acct="$1" pid="$2" pname="$3" root="$4" host="${5:-vercel}" pm token team stage url flag domain log label also idx site
+  local acct="$1" pid="$2" pname="$3" root="$4" host="${5:-vercel}" pm token team stage url flag domain log label also idx site notes="" ver
   pm="$(detect_pm "$root")"; STATIC=""
   if ! has_build "$root"; then
     STATIC="$(web_root "$root")"
@@ -605,14 +639,18 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
     vc proj_set "$root" account "$acct"; vc proj_set "$root" id "$pid"; vc proj_set "$root" name "$pname"; vc proj_set "$root" host "$host"
   fi
   [ "$PROD" = yes ] && web_version_guard "$root"
+  ver="$(node -p "require('$root/package.json').version||''" 2>/dev/null)"
+  mail_step "$pid" "${label:-$pname}"
+  [ "$MAIL" = yes ] && notes="$(pick_notes "$root" "$pid")"
 
   if [ "$host" = firebase ]; then
-    [ "$DRY" = yes ] && { dry_deploy_firebase "$acct" "$pid" "$root" "$pm"; exit 0; }
-    publish_firebase "$acct" "$pid" "$root" "$pm"; return
+    [ "$DRY" = yes ] && { dry_deploy_firebase "$acct" "$pid" "$root" "$pm"; dry_mail "$pid" "${label:-$pname}" "${ver:-—}" "https://${pid#*/}.web.app" "$notes" || true; exit 0; }
+    publish_firebase "$acct" "$pid" "$root" "$pm"
+    mail_after "$pid" "${label:-$pname}" "${ver:-—}" "$URL" "$notes" "$root"; return
   fi
 
   token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
-  [ "$DRY" = yes ] && { dry_deploy "$acct" "$pid" "$pname" "$root" "$pm"; exit 0; }
+  [ "$DRY" = yes ] && { dry_deploy "$acct" "$pid" "$pname" "$root" "$pm"; dry_mail "$pid" "${label:-$pname}" "${ver:-—}" "https://${pname}.vercel.app" "$notes" || true; exit 0; }
 
   stage="$(tmpd shipsite)"; trap "rm -rf '$stage' '$stage'-*.log" EXIT
   build_or_files "$root" "$pm" "$stage"
@@ -643,6 +681,7 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   row "link" "${B}${A}${url}${R}  ${D}copied${R}"
   [ -n "$also" ] && row "also" "${also}  ${D}stays as is${R}"
   URL="$url"; ALSO="$also"
+  mail_after "$pid" "${label:-$pname}" "${ver:-—}" "$URL" "$notes" "$root"
 }
 
 URL=""; ALSO=""; DONE_ID=""; DONE_NAME=""
@@ -650,10 +689,12 @@ done_menu(){ # $1 host $2 account $3 project id $4 name $5 folder -> after a pub
   local host="$1" acct="$2" pid="$3" pname="$4" root="$5" l dom pend idx
   [ "$host" = firebase ] && row "console" "https://console.firebase.google.com/project/${pid%%/*}/hosting/sites/${pid#*/}" \
                          || row "console" "https://vercel.com/$(vc acct_get "$acct" scope)/${pname}"
+  [ -n "$MAILED" ] && row "mail" "sent to $MAILED address$([ "$MAILED" = 1 ] || echo es)"
   while :; do
     l="$(vc label_get "$pid")"
-    MENU_ITEMS=("open the link in the browser" "label this project" "custom domain")
-    MENU_NOTES=("  ${D}${URL}${R}" "  ${D}${l:-$pname} — admin, landing, the domain it serves; change it any time${R}" "  ${D}$(vc domain_get "$pid")${R}")
+    MENU_ITEMS=("open the link in the browser" "label this project" "custom domain" "email for this project")
+    MENU_NOTES=("  ${D}${URL}${R}" "  ${D}${l:-$pname} — admin, landing, the domain it serves; change it any time${R}" "  ${D}$(vc domain_get "$pid")${R}"
+                "  ${D}$([ "$(vc people "$pid" to | grep -c .)" -gt 0 ] && recipients "$pid" || echo 'nobody yet — who gets the link next time')${R}")
     dom="$(vc domain_get "$pid")"; pend=""
     if [ "$host" = firebase ] && [ -n "$dom" ] && [ "$(vc url_get "$pid")" != "$dom" ]; then
       pend=yes; MENU_ITEMS+=("check the domain again"); MENU_NOTES+=("  ${D}asks Firebase whether ${dom} is live yet${R}")
@@ -661,13 +702,14 @@ done_menu(){ # $1 host $2 account $3 project id $4 name $5 folder -> after a pub
     MENU_ITEMS+=("back to projects" "quit"); MENU_NOTES+=("" "")
     printf "\n" >&2
     idx="$(menu_pick "Next" $(( ${#MENU_ITEMS[@]} - 2 )))"
-    [ -n "$pend" ] || [ "$idx" -lt 3 ] || idx=$((idx + 1))   # without the check row, the rows after it shift up by one
+    [ -n "$pend" ] || [ "$idx" -lt 4 ] || idx=$((idx + 1))   # without the check row, the rows after it shift up by one
     case "$idx" in
       0) open_it "$URL" || warn "could not open a browser — the link is copied" ;;
       1) vc label_set "$pid" "$(ask "Label for ${pname}" "${l:-$pname}")"; ok "saved" ;;
       2) custom_domain "$host" "$acct" "$pid" "$pname" ;;
-      3) domain_status "$acct" "$pid" || true ;;
-      4) return 0 ;;
+      3) setup_app_mail "$pid" "${l:-$pname}" ;;
+      4) domain_status "$acct" "$pid" || true ;;
+      5) return 0 ;;
       *) printf "\n" >&2; exit 0 ;;
     esac
   done
@@ -683,6 +725,7 @@ main(){
       --preview)           PROD=no ;;
       --dry-run|-n)        DRY=yes ;;
       accounts)            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "accounts"; accounts_menu; exit 0 ;;
+      mailbox)             [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "mailbox"; { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
       --version|-V|-v)     echo "ship-site $VERSION"; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-site${R} ${D}%s${R}\n\n" "$VERSION"
@@ -691,7 +734,8 @@ main(){
         printf "    ${A}ship-site --preview${R}   a test URL: a fresh preview on Vercel, the 7-day preview channel on Firebase\n"
         printf "    ${A}ship-site --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
         printf "    ${A}ship-site ~/site${R}      treat that folder as the current project\n"
-        printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts\n\n"
+        printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts\n"
+        printf "    ${A}ship-site mailbox${R}     the account the link is mailed from, shared with ship-apk\n\n"
         printf "  ${D}Run inside a web project and the project it publishes to is preselected. Settings live in %s${R}\n\n" "$CONF"
         exit 0 ;;
       *) ROOT="${arg/#\~/$HOME}"; is_project "$ROOT" || die "no package.json and no index.html in $ROOT" ;;
@@ -752,16 +796,17 @@ main(){
     done <<<"$lines"
     [ -n "$grp" ] && { MENU_ITEMS+=("  + new project here"); MENU_NOTES+=("  ${D}in ${grp}${R}"); kind+=("newin"$'\x1f'"$gh"$'\x1f'"$ga"); }
     [ ${#rows[@]} -gt 0 ] && { MENU_ITEMS+=($'\x01'); MENU_NOTES+=(""); kind+=(head); }   # a blank line sets the actions apart
-    MENU_ITEMS+=("  + new project" "  label a project" "  custom domain" "  accounts" "  refresh" "  quit")
+    MENU_ITEMS+=("  + new project" "  label a project" "  custom domain" "  mailbox" "  accounts" "  refresh" "  quit")
     MENU_NOTES+=("  ${D}a Vercel project or a Firebase site, by name${R}" "  ${D}your own name for one: admin, landing, the domain it serves${R}"
                  "  ${D}connect your own domain to a Firebase site; shows the DNS records to add${R}"
+                 "  ${D}$([ "$(mbox smtp_ready)" = yes ] && mbox smtp_get user || echo 'not set up yet') · the link can be mailed after a publish · shared with ship-apk${R}"
                  "  ${D}Vercel and Firebase: add, remove, sign in again${R}" "  ${D}fetch the project list again${R}" "")
-    kind+=(new label domain accounts refresh quit)
+    kind+=(new label domain mailbox accounts refresh quit)
     [ "$sel" -ge 0 ] || sel=0
     step "Projects"
     [ -n "$ROOT" ] && sub "you are in $(sed "s|^$HOME|~|" <<<"$ROOT")"
     [ -n "$rc" ] && [ "$rcseen" = no ] && sub "${Y}this folder's .firebaserc names Firebase project “${rc}”, which none of your signed-in accounts can see — add its Google account under accounts${R}"
-    MENU_FIXED=$([ ${#rows[@]} -gt 0 ] && echo 7 || echo 6)   # the actions stay on screen; only the projects scroll
+    MENU_FIXED=$([ ${#rows[@]} -gt 0 ] && echo 8 || echo 7)   # the actions stay on screen; only the projects scroll
     MENU_NOKEY=""; for i in "${!kind[@]}"; do case "${kind[$i]}" in row:*) MENU_NOKEY="$MENU_NOKEY $i" ;; esac; done
     idx="$(menu_pick "Pick one to publish" "$sel")"; MENU_FIXED=0; MENU_NOKEY=""   # set for that menu only; it ran in a subshell
     case "${kind[$idx]}" in
@@ -787,6 +832,7 @@ main(){
          vc label_set "$id" "$(ask "Label for ${nm} (blank removes it)" "$(vc label_get "$id")")"
          ok "saved — only a name for you, nothing changes on $([ "$h" = firebase ] && echo Firebase || echo Vercel)"
          continue ;;
+      mailbox)  [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; continue ;;
       accounts) accounts_menu; refresh; continue ;;
       refresh)  refresh; continue ;;
       quit)     printf "\n" >&2; exit 0 ;;

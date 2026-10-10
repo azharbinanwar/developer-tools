@@ -95,7 +95,7 @@ Amy
 ANS
   check "setup_app_mail: To saved"            is "$(cfg people fresh to)" "Amy	amy@example.com"
   check "setup_app_mail: skipped CC is empty" is "$(cfg people fresh cc)" ""
-  check "setup_app_mail: subject saved"       is "$(cfg proj_get fresh subject)" "{app} is ready"
+  check "setup_app_mail: subject saved"       is "$(cfg subject_get fresh)" "{app} is ready"
   cfg proj_del fresh
   cfg proj_set empty app E
   check "mail: no recipients → NO_RECIPIENTS" is "$(send_mail empty E 1 l n yes)" NO_RECIPIENTS
@@ -174,15 +174,22 @@ ANS
   check "app list: missing folder is flagged"   grep -q "folder missing" <<<"${MENU_NOTES[1]}"
   cfg proj_del demo; cfg proj_del other
 
+  # the mailbox is shared: ~/.config/developer-tools/mail.json; a ship-apk 2.0 mailbox moves over on first use
+  rm -f "$HOME/.config/developer-tools/mail.json"
+  python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["smtp"]={"host":"","port":465,"user":"old@old.com","password":"pw","from_name":"Old"}; json.dump(d,open(p,"w"))' "$HOME/.config/ship-apk/config.json"
+  check "mailbox: an old ship-apk mailbox is taken over" is "$(mbox smtp_get user)" old@old.com
+  check "mailbox: lives in developer-tools"             test -f "$HOME/.config/developer-tools/mail.json"
+  check "mailbox: file is 0600"                         is "$(fmode "$HOME/.config/developer-tools/mail.json")" 600
+  check "mailbox: site template has its own subject"    is "$(mbox tpl_get site subject)" "{app} {version} is live"
   # guided mailbox setup, answers piped: address, password, host, port, from name, no test mail
   printf 'me@gmail.com\nsecret\n\n\nMe\nn\n' | setup_mailbox >/dev/null 2>&1 || true
-  check "mailbox setup: address saved"        is "$(cfg smtp_get user)" me@gmail.com
-  check "mailbox setup: gmail host guessed"   is "$(cfg smtp_get host)" smtp.gmail.com
-  check "mailbox setup: gmail port guessed"   is "$(cfg smtp_get port)" 465
-  check "mailbox setup: password saved"       is "$(cfg smtp_get password)" secret
-  check "mailbox setup: ready afterwards"     is "$(cfg smtp_ready)" yes
+  check "mailbox setup: address saved"        is "$(mbox smtp_get user)" me@gmail.com
+  check "mailbox setup: gmail host guessed"   is "$(mbox smtp_get host)" smtp.gmail.com
+  check "mailbox setup: gmail port guessed"   is "$(mbox smtp_get port)" 465
+  check "mailbox setup: password saved"       is "$(mbox smtp_get password)" secret
+  check "mailbox setup: ready afterwards"     is "$(mbox smtp_ready)" yes
   printf 'me@gmail.com\n\n\n\n\nn\n' | setup_mailbox >/dev/null 2>&1 || true
-  check "mailbox setup: Enter keeps the password" is "$(cfg smtp_get password)" secret
+  check "mailbox setup: Enter keeps the password" is "$(mbox smtp_get password)" secret
 
   # fvm detection and a fake flutter that really writes an apk
   fb="$(mktemp -d)"; p="$(mktemp -d)"; printf 'name: x\nversion: 2.0.0+7\n' > "$p/pubspec.yaml"
@@ -586,6 +593,31 @@ FAKE
   check "done: a pending domain adds the check option"       grep -q "check the domain again" <<<"$out"
   out="$(bash -c 'source ./ship-site/ship-site; vc domain_set shop-1/shop-1 ""; URL=https://x; printf "p" | done_menu firebase a@x.com shop-1/shop-1 shop-1 /tmp' 2>&1)"
   check "done: no check option without a domain"             not grep -q "check the domain again" <<<"$out"
+  # mail for a project: who gets the link, kept per project id; the mailbox is the shared one
+  vc person_add shop-1/shop-1 Sam sam@example.com; vc person_add shop-1/shop-1 QA qa@example.com bcc
+  check "site mail: people per project"                      is "$(vc people shop-1/shop-1)" $'Sam\tsam@example.com'
+  check "site mail: recipients summary"                      is "$(recipients shop-1/shop-1)" "1 person + 1 BCC"
+  vc subject_set shop-1/shop-1 "{app} is up"
+  mail="$(send_mail shop-1/shop-1 "Shop" 1.2.3 https://shop-1.web.app "- new banner" yes)"
+  check "site mail: site template body"                      grep -q "Shop 1.2.3 is published" <<<"$mail"
+  check "site mail: project subject wins"                    grep -q "Subject: Shop is up" <<<"$mail"
+  check "site mail: link and notes in"                       bash -c 'grep -q "https://shop-1.web.app" <<<"$1" && grep -q "new banner" <<<"$1"' _ "$mail"
+  check "site mail: counts To+BCC"                           grep -q $'^DRY\t2$' <<<"$mail"
+  out="$(bash -c 'source ./ship-site/ship-site; mail_step shop-1/shop-1 Shop < <(printf "x"); echo "mail=$MAIL"' 2>&1)"
+  check "site mail: skip leaves MAIL=no"                     grep -q "mail=no" <<<"$out"
+  check "site mail: skip is remembered"                      is "$(vc mail_default_get shop-1/shop-1)" no
+  out="$(bash -c 'source ./ship-site/ship-site; mail_step shop-1/shop-1 Shop < <(printf "sy"); echo "mail=$MAIL"' 2>&1)"
+  check "site mail: s then y gives MAIL=yes"                 grep -q "mail=yes" <<<"$out"
+  check "site mail: a key pick asks y first"                 grep -q "Mail the link to 1 person + 1 BCC afterwards?" <<<"$out"
+  check "site mail: send is offered by name"                 grep -q "send the link to 1 person + 1 BCC" <<<"$out"
+  mbox smtp_set host 127.0.0.1; mbox smtp_set port 1; vc mail_default_set shop-1/shop-1 no
+  out="$(PATH="$fbin2:$PATH" bash -c 'source ./ship-site/ship-site; DRY=yes; PROD=""; printf "tys\n" | deploy a@x.com shop-1/shop-1 shop-1 "$1" firebase' _ "$p" 2>&1 || true)"
+  check "site dry run: the Email step is in the flow"        grep -q "▸ Email" <<<"$out"
+  check "site dry run: mailbox login is checked"             grep -q "mailbox login failed" <<<"$out"
+  check "site dry run: nothing saved for mail"               is "$(vc mail_default_get shop-1/shop-1)" no
+  vc person_del shop-1/shop-1 sam@example.com; vc person_del shop-1/shop-1 qa@example.com bcc
+  out="$(bash -c 'source ./ship-site/ship-site; mail_step shop-1/shop-1 Shop < <(printf "x"); echo "mail=$MAIL"' 2>&1)"
+  check "site mail: nobody yet offers the project's email"   grep -q "set up this project's email" <<<"$out"
   check "domain: y keeps an odd ending"                      bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nyr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' && [ "$(vc domain_get shop-1/shop-1)" = admin.sukungarden ]
   vc domain_set shop-1/shop-1 ""; vc domain_set prj_9 ""
   # cache: a young cache skips the refresh, a stale one runs it

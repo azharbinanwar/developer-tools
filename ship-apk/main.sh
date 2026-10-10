@@ -9,10 +9,12 @@
 #
 # License: MIT.
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 CONF="$HOME/.config/ship-apk"
 CONFIG="$CONF/config.json"
 LOGS="$CONF/logs"
+MAIL_KIND=apk; MAIL_VERB="uploads"; MAIL_THING="app"   # how lib/mail.sh talks about this tool
+mail_store(){ cfg "$@"; }                                # where this tool keeps who gets the mail
 API="https://appho.st/api"
 DRY=no; VERBOSE=no
 MAX_MB=100          # appho.st free tier rejects builds bigger than this
@@ -87,12 +89,15 @@ elif op == "person_add":      # key name email [to|bcc]
 elif op == "person_del":      # key email [to|bcc]
     p = proj(a[0]); f = a[2] if len(a) > 2 else "to"
     p[f] = [r for r in p.get(f, []) if r.get("email") != a[1]]; save()
-elif op == "smtp_get":  print(d["smtp"].get(a[0], ""))
-elif op == "smtp_set":  d["smtp"][a[0]] = a[1]; save()
-elif op == "smtp_ready":
-    s = d["smtp"]
-    print("yes" if s.get("host") and s.get("user") and s.get("password") else "no")
-elif op == "tpl_get": print(d["template"].get(a[0], ""))
+elif op == "subject_get":      print(d["projects"].get(a[0], {}).get("subject", ""))
+elif op == "subject_set":      proj(a[0])["subject"] = a[1]; save()
+elif op == "sha_get":          print(d["projects"].get(a[0], {}).get("last_sha", ""))
+elif op == "sha_set":          proj(a[0])["last_sha"] = a[1]; save()
+elif op == "mail_default_get": print(d["projects"].get(a[0], {}).get("mail_default", ""))
+elif op == "mail_default_set": proj(a[0])["mail_default"] = a[1]; save()
+elif op == "mail_json":        # key -> {"to": [...], "cc": [...], "bcc": [...], "subject": ""} for send_mail
+    p = d["projects"].get(a[0], {})
+    print(json.dumps({f: p.get(f, []) for f in ("to", "cc", "bcc")} | {"subject": p.get("subject", "")}))
 else: sys.exit(2)
 PY
 }
@@ -232,19 +237,6 @@ build_apk(){ # $1 root -> echoes the apk path on stdout, nothing else
 # ── notes ─────────────────────────────────────────────────────────────────
 # What changed since the last time this project was shipped, so the mail says
 # something. Empty if the folder is not a git repo.
-git_notes(){ # $1 root  $2 key
-  local since
-  [ -d "$1/.git" ] || return 0
-  since="$(cfg proj_get "$2" last_sha)"
-  if [ -n "$since" ] && ( cd "$1" && git cat-file -e "$since^{commit}" 2>/dev/null ); then
-    ( cd "$1" && git log --format='- %s' "$since..HEAD" 2>/dev/null | head -8 )
-  else
-    ( cd "$1" && git log --format='- %s' -5 2>/dev/null )
-  fi
-}
-head_sha(){ [ -d "$1/.git" ] && ( cd "$1" && git rev-parse HEAD 2>/dev/null ); }
-
-
 # ── upload ────────────────────────────────────────────────────────────────
 UPLOAD_LINK=""
 do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LINK
@@ -315,36 +307,6 @@ do_upload(){ # $1 apk  $2 project key  $3 app name  $4 version -> sets UPLOAD_LI
 }
 
 
-pick_notes(){ # $1 root  $2 key -> echoes the "What changed" text for the mail, chosen before anything runs
-  local git f
-  git="$(git_notes "$1" "$2")"
-  step "What changed  ${D}goes into the mail as {notes}${R}"
-  if [ -n "$git" ]; then
-    printf '%s\n' "$git" | while IFS= read -r f; do sub "$f"; done
-    MENU_ITEMS=("use these" "write my own" "no notes")
-    MENU_NOTES=("  ${D}commit titles since the last send${R}" "  ${D}opens your editor with these to start from · Markdown is fine${R}" "")
-  else
-    sub "no commits to list — not a git repo, or nothing new since the last send"
-    MENU_ITEMS=("no notes" "write my own"); MENU_NOTES=("" "  ${D}opens your editor · Markdown is fine${R}")
-  fi
-  case "${MENU_ITEMS[$(menu_pick "Notes" -1 0)]}" in
-    "use these") printf '%s' "$git" ;;
-    "no notes")  ;;
-    *) f="$(tmpf shipapk-notes).md"
-       { printf '%s\n' "$git"; printf '\n# Write what changed. Lines starting with # are dropped. Save and close to continue.\n'; } > "$f"
-       edit_file "$f" || warn "open $f yourself, save it, then press Enter"
-       git="$(grep -v '^#' "$f" | awk '
-         /^[[:space:]]*[•●▪–]+[[:space:]]*$/ { pre = "- "; next }
-         /^[[:space:]]*[◦○]+[[:space:]]*$/   { pre = "  - "; next }
-         { sub(/^[[:space:]]*[•●▪]+[[:space:]]+/, "- "); sub(/^[[:space:]]*[◦○]+[[:space:]]+/, "  - "); print pre $0; pre = "" }' \
-         | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
-       rm -f "$f"
-       if [ -n "$git" ]; then ok "notes for the mail:"; printf '%s\n' "$git" | while IFS= read -r f; do sub "$f"; done
-       else warn "the file was empty — sending without notes"; fi
-       printf '%s' "$git" ;;
-  esac
-}
-
 bump_version(){ # $1 version like 1.4.2+17  $2 build|patch|minor|major -> next version; the +build always goes up when present
   local name="${1%%+*}" build="" ma mi pa
   name="${name%%-*}"   # a pre-release tag (1.0.0-beta.1) is dropped: bumping moves past it
@@ -388,10 +350,8 @@ dry_ship(){ # $1 key $2 root $3 name $4 version $5 fresh $6 last apk $7 want_mai
   grep -q '^version: *[0-9]' "$root/pubspec.yaml" && ok "pubspec.yaml has a version" || { warn "✗ pubspec.yaml has no version line — a date stamp would be used"; }
   [ -n "$(cfg proj_get "$key" app_id)" ] && ok "appho.st app id is set" || { warn "✗ no appho.st app id"; bad=1; }
   { [ -n "$(cfg proj_get "$key" user_id)" ] && [ -n "$(cfg proj_get "$key" key)" ]; } && ok "appho.st user_id and API key are set" || { warn "✗ appho.st user_id or API key missing"; bad=1; }
-  if [ "$want_mail" = yes ]; then
-    r="$(smtp_login_check)"
-    case "$r" in OK) ok "mailbox login works  ${D}$(cfg smtp_get user)${R}" ;; *) warn "✗ mailbox login failed: ${r#FAIL	}"; bad=1 ;; esac
-  fi
+  MAIL="$want_mail"
+  [ "$want_mail" = yes ] && { r="$(smtp_login_check)"; case "$r" in OK) ok "mailbox login works  ${D}$(mbox smtp_get user)${R}" ;; *) warn "✗ mailbox login failed: ${r#FAIL	}"; bad=1 ;; esac; }
 
   step "Dry run · would run"
   if [ "$fresh" = yes ]; then cmd "cd $root && $fl build apk --release"
@@ -453,33 +413,7 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
   local fresh=no; [ "$idx" -eq 0 ] && fresh=yes
 
   # 2. mail: send, set up what is missing (mailbox, then this app's email), or skip
-  want_mail="$(cfg proj_get "$key" mail_default)"
-  case "$want_mail" in false|none|no) want_mail=no ;; *) want_mail=yes ;; esac
-  step "Email"
-  while :; do
-    n="$(cfg people "$key" to | grep -c .)"
-    if [ "$(cfg smtp_ready)" != yes ]; then
-      MENU_ITEMS=("set up mailbox" "skip mail this time")
-      MENU_NOTES=("  ${D}the address the link is sent from — once, for every app${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}")
-      [ "$(menu_pick "No mailbox yet" 1 0)" = 0 ] && { setup_mailbox; continue; }
-    elif [ "$n" -eq 0 ]; then
-      MENU_ITEMS=("set up this app's email" "skip mail this time")
-      MENU_NOTES=("  ${D}To, CC, BCC and subject for “${name}”${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}")
-      [ "$(menu_pick "Mailbox ready · nobody to send to yet" 1 0)" = 0 ] && { setup_app_mail "$key" "$name"; continue; }
-    else
-      MENU_ITEMS=("send the link to $(recipients "$key")" "skip mail this time" "change To, CC, BCC or subject")
-      MENU_NOTES=("  ${D}To $(cfg people "$key" to | cut -f2 | tr '\n' ' ')$(cfg people "$key" cc | cut -f2 | tr '\n' ' ' | sed 's/^./· CC &/')$(cfg people "$key" bcc | cut -f2 | tr '\n' ' ' | sed 's/^./· BCC &/')${R}" "  ${D}still uploads, copies the link, opens the APK folder${R}" "")
-      [ "$want_mail" = yes ] && idx=0 || idx=1
-      case "$(menu_pick "Mail" 1 "$idx")" in
-        0) # a single stray key must not mail the testers
-           if picked_by_key && [ "$DRY" != yes ] && ! confirm_y "Mail the link to $(recipients "$key") after the upload?"; then continue; fi
-           want_mail=yes; break ;;
-        2) setup_app_mail "$key" "$name"; continue ;;
-      esac
-    fi
-    want_mail=no; break
-  done
-  cfg proj_set "$key" mail_default "$want_mail"
+  mail_step "$key" "$name"; want_mail="$MAIL"
   [ "$want_mail" = yes ] && notes="$(pick_notes "$root" "$key")"
 
   [ "$DRY" = yes ] && { dry_ship "$key" "$root" "$name" "$version" "$fresh" "$apk" "$want_mail" "$notes"; return; }
@@ -493,22 +427,7 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
   done
   cfg proj_set "$key" last_version "$version"; cfg proj_set "$key" last_date "$(date '+%d %b %H:%M')"; cfg stat_add "$key"
 
-  if [ "$want_mail" = no ]; then
-    log_send "$key" "$version" "$UPLOAD_LINK" "0 (link only)"
-  else
-    step "Sending"
-    result="$(send_mail "$key" "$name" "$version" "$UPLOAD_LINK" "$notes")"
-    case "$result" in
-      OK*) count="$(printf '%s' "$result" | cut -f2)"; fails="$(printf '%s' "$result" | cut -f3)"
-           ok "sent to $count address$([ "$count" = 1 ] || echo es)"
-           [ -n "$fails" ] && warn "failed: $fails"
-           cfg proj_set "$key" last_sha "$(head_sha "$root")"
-           log_send "$key" "$version" "$UPLOAD_LINK" "$count" ;;
-      NO_RECIPIENTS) warn "no recipients saved"; want_mail=no ;;
-      FAIL*) warn "could not send: $(printf '%s' "$result" | cut -f2)"
-             sub "check host, port, address and password under mailbox"; want_mail=no ;;
-    esac
-  fi
+  MAIL="$want_mail"; mail_after "$key" "$name" "$version" "$UPLOAD_LINK" "$notes" "$root"; want_mail="$MAIL"
 
   # 4. done — what next; when no mail went out, opening the APK folder comes first
   apkdir="$(dirname "$apk")"
@@ -563,7 +482,7 @@ edit_app(){ # $1 project key -> everything about one app in one place; returns 1
     MENU_NOTES=("  ${D}$(cfg people "$key" to | cut -f2 | tr '\n' ' ' | grep . || echo 'nobody yet')${R}"
                 "  ${D}$(cfg people "$key" cc | cut -f2 | tr '\n' ' ' | grep . || echo '—')${R}"
                 "  ${D}$(cfg people "$key" bcc | cut -f2 | tr '\n' ' ' | grep . || echo '—')${R}"
-                "  ${D}$(cfg proj_get "$key" subject | grep . || cfg tpl_get subject)${R}"
+                "  ${D}$(cfg subject_get "$key" | grep . || mbox tpl_get apk subject)${R}"
                 "  ${D}$(cfg proj_get "$key" app)  · used in the email${R}"
                 "  ${D}$(cfg proj_get "$key" app_id)  · from the appho.st app page${R}"
                 "  ${D}$(cfg proj_get "$key" path)${R}"
@@ -594,7 +513,7 @@ main(){
       --dry-run|-n) DRY=yes ;;
       --verbose)    VERBOSE=yes ;;
       --version|-V|-v) echo "ship-apk $VERSION"; exit 0 ;;
-      config|-c)    cfg smtp_ready >/dev/null; banner "ship-apk $VERSION" "mail account"; smtp_menu; exit 0 ;;
+      config|-c)    banner "ship-apk $VERSION" "mail account"; smtp_menu; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-apk${R} ${D}%s${R}\n\n" "$VERSION"
         printf "    ${A}ship-apk${R}             your apps; pick one, it builds, uploads and mails the link\n"
@@ -609,7 +528,7 @@ main(){
 
   [ -t 0 ] || die "ship-apk needs a terminal — run it, do not pipe into it"
   have python3 || die "python3 is required (it ships with macOS developer tools)."
-  cfg smtp_ready >/dev/null   # creates config.json on first run
+  cfg projects >/dev/null   # creates config.json on first run
   banner "ship-apk $VERSION" "build it, ship it, mail the link"
   [ "$DRY" = yes ] && sub "${Y}dry run — checks everything, then shows what it would do; nothing is built, uploaded, mailed or written${R}"
   ROOT="$(find_root)" || ROOT=""
@@ -625,7 +544,7 @@ main(){
     fi
     MENU_ITEMS+=("edit an app" "mailbox" "quit")
     MENU_NOTES+=("  ${D}To, CC, BCC, subject, credentials, folder, remove${R}"
-                 "  ${D}$([ "$(cfg smtp_ready)" = yes ] && cfg smtp_get user || echo 'not set up yet') · template${R}" "")
+                 "  ${D}$([ "$(mbox smtp_ready)" = yes ] && mbox smtp_get user || echo 'not set up yet') · shared with ship-site · template${R}" "")
     step "Apps"
     [ "$napps" -gt 0 ] || sub "no apps yet — add one to get started"
     MENU_NOKEY="$(nokey_rows "$napps")"
@@ -639,7 +558,7 @@ main(){
          MENU_NOKEY="$(nokey_rows "$napps")"
          idx="$(menu_pick "App" "$napps" "$(( HERE < 0 ? 0 : HERE ))")"; MENU_NOKEY=""
          [ "$idx" -lt "$napps" ] && edit_app "${PROJ_KEYS[$idx]}" ;;
-      2) [ "$(cfg smtp_ready)" = yes ] && smtp_menu || setup_mailbox ;;
+      2) [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox ;;
       3) printf "\n" >&2; exit 0 ;;
       *) ship "${PROJ_KEYS[$idx]}" "${PROJ_PATHS[$idx]}" || { printf "\n" >&2; exit 0; } ;;
     esac

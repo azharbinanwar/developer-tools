@@ -27,6 +27,7 @@ ship-site --preview    a fresh test URL, the main website untouched
 ship-site --dry-run    check everything and show what would happen; changes nothing (also -n)
 ship-site ~/site       treat that folder as the current project
 ship-site accounts     add or remove Vercel and Firebase accounts
+ship-site mailbox      the account the link is mailed from, shared with ship-apk
 ship-site -v           version
 ```
 
@@ -107,7 +108,19 @@ If another folder already publishes to this project, you are told which one and 
 
 Enter publishes as is. **bump** asks `New version [1.0.1] ›`: Enter takes it, or type any version like `1.1.0`. It updates `package.json` with `npm version <new> --no-git-tag-version`, so nothing is committed or tagged. If this version is already live, the header says **live already** and **bump** is preselected. Test versions never ask.
 
-### 5. Build and publish
+### 5. Email (optional)
+
+Off until you set it up; then it works like ship-apk's. The step names exactly what is missing:
+
+| State | You see |
+| --- | --- |
+| no mailbox yet | **set up mailbox** or skip |
+| mailbox ready, nobody to send to | **set up this project's email** or skip |
+| both ready | **send the link to 2 people + 1 CC**, skip, or change To, CC, BCC or subject |
+
+The mailbox (address, password, SMTP host) is one for both tools, in `~/.config/developer-tools/mail.json`; a mailbox set up in ship-apk is already there. Who gets the mail is per project. When mail is going out, the commit titles since the last send are offered as notes (**use these**, **write my own** in your editor, **no notes**). The mail goes after the publish succeeds, with the link (your domain once it is live), version and notes; the done screen says how many it reached. The template is `template_site` in `mail.json`, with `{name} {app} {version} {link} {notes} {sender}`.
+
+### 6. Build and publish
 
 The exact commands are shown, then run: `npm run build` (or pnpm, yarn or bun from the lockfile), then the deploy from a temporary copy of the build output (the first of `dist/`, `build/`, `out/`, `_site/` that holds an `index.html`) outside your git repo.
 
@@ -118,7 +131,7 @@ The exact commands are shown, then run: `npm run build` (or pnpm, yarn or bun fr
    folder      /Users/azharali/Desktop/mine/SukunGardenWeb/site  no build — published as they are, 47 files
 ``` No source, `node_modules`, `.env` or git commit info leaves your Mac, so Vercel's commit-author check never blocks it. For Firebase the copy gets its own `firebase.json`, keeping your project's redirects, headers and rewrites; nothing is added to your repo. The copy is deleted afterwards. If the build or deploy fails, the host's error is shown and it stops.
 
-### 6. Done
+### 7. Done
 
 ```
 ▸ Published
@@ -128,6 +141,7 @@ The exact commands are shown, then run: `npm run build` (or pnpm, yarn or bun fr
  ❯ [o]  open the link in the browser
    [l]  label this project       none yet — admin, landing, the domain it serves
    [d]  custom domain            admin.sukungarden.com
+   [e]  email for this project   2 people + 1 CC
    [p]  back to projects
    [q]  quit
 ```
@@ -143,6 +157,8 @@ The link is printed and copied; for the main website it is your own domain once 
 | project list, refresh | ✅ runs (read-only) |
 | new project or site name | ✅ asked and shown back; ⏭ not created |
 | custom domain | ⏭ says what it would connect |
+| mailbox login | ✅ checked (logs in and out, sends nothing) |
+| mail | ⏭ shows the mail exactly as it would go out |
 | add or remove an account | ✅ runs |
 | new Vercel project | ⏭ says it would create it |
 | version | ⏭ shows the new version, does not touch `package.json` |
@@ -165,6 +181,16 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 | `n` | new project | `project.new` |
 | `l` | label a project | `project.label` |
 | `d` | custom domain | `project.domain` |
+| `m` | mailbox | `mailbox` |
+| `e` | email for this project (after publishing) | `project.mail` |
+| `s` | send the link | `mail.send` |
+| `x` | skip mail this time | `mail.skip` |
+| `c` | change to, cc, bcc or subject | `mail.change` |
+| `m` | set up mailbox | `mail.setup_box` |
+| `e` | set up this project's email | `mail.setup_app` |
+| `u` | use these (notes) | `notes.use` |
+| `w` | write my own | `notes.write` |
+| `x` | no notes | `notes.none` |
 | `s` | new site here (Firebase, on Publish to) | `site.new` |
 | `c` | connect it now (a Firebase custom domain) | `domain.connect` |
 | `r` | just keep it as a reminder | `domain.remember` |
@@ -204,7 +230,9 @@ bash, python3 and node on macOS, Linux or Windows (Git Bash or WSL), plus the CL
 
 | What | Where |
 | --- | --- |
-| Accounts, scopes, project list, labels, which project each folder uses, publish counts and dates, last published version | `~/.config/ship-site/config.json` (mode 0600) |
+| Accounts, scopes, project list, labels, which project each folder uses, publish counts and dates, last published version, who gets the mail per project | `~/.config/ship-site/config.json` (mode 0600) |
+| The mailbox the link is sent from, and the mail templates | `~/.config/developer-tools/mail.json` (mode 0600), shared with ship-apk |
+| Send logs | `~/.config/ship-site/logs/` |
 | Each Vercel account's sign-in | `~/.config/ship-site/accounts/<name>/` (mode 0700) |
 | Firebase sign-ins | the Firebase CLI's own store (`firebase login:list`) |
 | Your normal `vercel login` | untouched |

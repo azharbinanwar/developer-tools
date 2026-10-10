@@ -70,7 +70,7 @@ Settled before anything runs, and it names exactly what is missing:
 | mailbox ready, nobody to send to | **set up this app's email** or skip |
 | both ready | **send the link to 1 person + 1 CC**, skip, or change To, CC, BCC or subject |
 
-**set up mailbox** asks one thing at a time: address, password, SMTP host and port (prefilled for Gmail, Outlook, iCloud, Yahoo and Zoho), the name people see, then offers a test mail. Gmail needs an [app password](https://myaccount.google.com/apppasswords).
+**set up mailbox** asks one thing at a time: address, password, SMTP host and port (prefilled for Gmail, Outlook, iCloud, Yahoo and Zoho), the name people see, then offers a test mail. Gmail needs an [app password](https://myaccount.google.com/apppasswords). The mailbox is shared with ship-site: set it up once, both tools send from it.
 
 **set up this app's email** asks To, then CC, then BCC (blank skips), then the subject.
 
@@ -116,7 +116,7 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 
 Passwords show one `*` per character; Enter keeps a saved one.
 
-The mail template is plain text in `config.json` (mailbox › edit the mail template) with `{name}` `{app}` `{version}` `{link}` `{notes}` `{sender}`.
+The mail template is plain text in `~/.config/developer-tools/mail.json` (mailbox › edit the mail template), `template_apk`, with `{name}` `{app}` `{version}` `{link}` `{notes}` `{sender}`.
 
 ## Keys
 
@@ -174,7 +174,8 @@ bash, python3 and curl (built in on macOS and Linux; Git Bash plus Python on Win
 
 | What | Where |
 | --- | --- |
-| Apps, credentials, mailbox, template, ship counts and dates, last shipped version | `~/.config/ship-apk/config.json` (mode 0600) |
+| Apps, credentials, who gets the mail per app, ship counts and dates, last shipped version | `~/.config/ship-apk/config.json` (mode 0600) |
+| The mailbox the link is sent from, and the mail templates | `~/.config/developer-tools/mail.json` (mode 0600), shared with ship-site; a 2.0 mailbox moves over on first run |
 | Build and send logs | `~/.config/ship-apk/logs/` |
 
 The only file it ever changes in your project is the `version:` line of `pubspec.yaml`, and only when you pick **bump**. The free appho.st tier rejects APKs over 100 MB; you are warned before the upload.

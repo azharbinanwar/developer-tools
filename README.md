@@ -8,7 +8,7 @@ Small terminal tools for macOS, Linux and Windows (Git Bash or WSL). Each one is
 | Tool | What it does | Needs |
 | --- | --- | --- |
 | [ship-apk](ship-apk/README.md) | Build a Flutter APK, upload it to appho.st, mail the link to testers | flutter or fvm |
-| [ship-site](ship-site/README.md) | Build a web app, publish it to Vercel or Firebase Hosting, copy the link | node, plus the Vercel or Firebase CLI |
+| [ship-site](ship-site/README.md) | Build a web app, publish it to Vercel or Firebase Hosting, copy the link, mail it if you like | node, plus the Vercel or Firebase CLI |
 
 ---
 
@@ -149,6 +149,7 @@ The test suite runs on macOS and Linux in GitHub Actions on every push.
 | --- | --- |
 | ship-apk | `~/.config/ship-apk/config.json` plus build and send logs in `logs/` |
 | ship-site | `~/.config/ship-site/config.json` plus each Vercel account's sign-in in `accounts/`; Firebase sign-ins stay in the Firebase CLI |
+| the mailbox | `~/.config/developer-tools/mail.json`, one sending account and the mail templates, shared by ship-apk and ship-site |
 | your keys | `~/.config/developer-tools/keys.json`, shared by all three tools |
 
 Trying it online and installing it share the same settings, so you can start one way and switch later. The only thing either tool changes in your project is the version (`pubspec.yaml` or `package.json`), and only when you pick **bump**. Credentials are stored with mode 0600; keep that folder private.

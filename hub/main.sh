@@ -9,7 +9,7 @@
 #
 # License: MIT.
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 # ── channel ───────────────────────────────────────────────────────────────
 # stable: GitHub's "latest" release, which never includes a pre-release. beta: the newest release of all,
 # pre-releases included. The choice is saved once in ~/.config/developer-tools/channel and used by every
