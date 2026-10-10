@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# build: glues lib/*.sh and each tool's main.sh into the one file that is released, run online and installed.
+# The first line of a main.sh names the lib parts it needs, in order: "# needs: platform ui keys mail".
+set -euo pipefail
+cd "$(dirname "$0")"
+build(){ # $1 tool's main.sh  $2 the built file
+  local needs part
+  needs="$(sed -n '1s/^# needs: //p' "$1")"
+  [ -n "$needs" ] || { echo "$1: first line must be '# needs: …'" >&2; exit 1; }
+  {
+    echo '#!/usr/bin/env bash'
+    sed -n '2,/^$/p' "$1" | sed '$d'           # the tool's own header comment, up to the first blank line
+    echo "#"
+    echo "# Built by ./build from lib/*.sh and $1 — edit those, then run ./build; this file is the result."
+    echo
+    echo 'set -uo pipefail'
+    for part in $needs; do
+      [ -f "lib/$part.sh" ] || { echo "$1 needs lib/$part.sh, which does not exist" >&2; exit 1; }
+      echo; cat "lib/$part.sh"
+    done
+    echo
+    sed '1,/^$/d' "$1"                          # the rest of main.sh, after the header block
+  } > "$2"
+  chmod +x "$2"
+}
+build ship-site/main.sh ship-site/ship-site
+build ship-apk/main.sh   ship-apk/ship-apk
+build hub/main.sh        developer-tools

@@ -161,7 +161,7 @@ Trying it online and installing it share the same settings, so you can start one
 ./test.sh
 ```
 
-Syntax-checks every script, drives the menus with fed keystrokes, and exercises the config stores, mail rendering, version bumps and dry runs in a throwaway home folder. The same test runs in GitHub Actions on every push.
+Checks the built files are current (`./build`), syntax-checks every script, drives the menus with fed keystrokes, and exercises the config stores, mail rendering, version bumps and dry runs in a throwaway home folder. The same test runs in GitHub Actions on every push.
 
 ## Releases
 
@@ -173,7 +173,7 @@ Rehearse first, on your Mac, with no tag and nothing pushed:
 
 It renders the Homebrew formulas from the local scripts, really installs them with `brew`, checks `--version`, uninstalls, and with `TAP_TOKEN` exported also proves the token can push to the tap. Then:
 
-1. Bump `VERSION` in all three scripts and commit.
+1. Bump `VERSION` in `ship-apk/main.sh`, `ship-site/main.sh` and `hub/main.sh`, run `./build`, commit.
 2. Beta first: `git tag v2.0.0-beta.1 && git push origin v2.0.0-beta.1`. It is published as a pre-release, which only the beta channel picks up.
 3. When it is right: `git tag v2.0.0 && git push origin v2.0.0`. Everyone gets it.
 

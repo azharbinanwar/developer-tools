@@ -6,7 +6,7 @@ Key facts:
 - Releases live on this repo: https://github.com/azharbinanwar/developer-tools/releases
 - Homebrew tap: `azharbinanwar/homebrew-tap`, formulas under `Formula/`, updated by the release workflow
 - Install links point at `releases/latest`, so between tags the previous release keeps serving
-- All three scripts (`ship-apk`, `ship-site`, `developer-tools`) must carry the same `VERSION`; the workflow refuses a tag that does not match
+- All three tools must carry the same `VERSION` (set in each `main.sh`, then `./build`); the workflow refuses a tag that does not match
 
 ## 1. Decide the version
 
@@ -27,7 +27,7 @@ A beta is found through the GitHub API (newest release, pre-releases included), 
 
 ## 2. Bump
 
-`VERSION="X.Y.Z-beta.1"` (or `X.Y.Z` for the stable tag) in `ship-apk/ship-apk`, `ship-site/ship-site` and `developer-tools`; the workflow refuses a tag that does not match all three.
+`VERSION="X.Y.Z-beta.1"` (or `X.Y.Z` for the stable tag) in `ship-apk/main.sh`, `ship-site/main.sh` and `hub/main.sh`, then `./build` and commit the built files with them; the workflow refuses a tag that does not match all three.
 
 ## 3. Rehearse on this Mac
 

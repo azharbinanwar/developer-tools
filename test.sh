@@ -19,6 +19,7 @@ echo "── lint"
 for f in ship-apk/ship-apk ship-site/ship-site developer-tools homebrew/render test-release.sh; do check "syntax $f" bash -n "$f"; done
 # bash 3.2 reads “$var” as a variable named var” → unbound; always write ${var}”
 if command -v shellcheck >/dev/null; then for f in ship-apk/ship-apk ship-site/ship-site developer-tools; do check "shellcheck (errors) $f" shellcheck -S error -s bash "$f"; done; fi
+check "built files match lib/ and main.sh (run ./build)" bash -c 'd=$(mktemp -d); cp ship-site/ship-site ship-apk/ship-apk developer-tools "$d"/ && ./build && cmp -s ship-site/ship-site "$d/ship-site" && cmp -s ship-apk/ship-apk "$d/ship-apk" && cmp -s developer-tools "$d/developer-tools"'
 check "no bare \$var before a curly quote" bash -c '! grep -nE '"'"'\$[A-Za-z_][A-Za-z_0-9]*”'"'"' ship-apk/ship-apk ship-site/ship-site developer-tools'
 v="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' ship-apk/ship-apk)"
 for f in ship-site/ship-site developer-tools; do check "VERSION $f = $v" grep -q "^VERSION=\"$v\"" "$f"; done
