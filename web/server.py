@@ -46,7 +46,7 @@ def start(body):
     if not SHIP_SITE: return {"error": "ship-site is not installed on this computer"}
     pid, folder = str(body.get("id", "")), str(body.get("folder", ""))
     target, version, notes, mail = body.get("target"), str(body.get("version", "keep")), str(body.get("notes", "-")), bool(body.get("mail"))
-    if not pid or target not in ("main", "test"): return {"error": "which project, and main or test?"}
+    if not pid or target not in ("main", "test"): return {"error": "Pick a project and where to publish."}
     if version not in ("keep", "next") and not re.match(r"^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$", version): return {"error": "a version like 1.2.3, or keep or next"}
     if target == "test": version = "keep"
     args = [SHIP_SITE, "--project", pid, "--prod" if target == "main" else "--preview", "--version=" + version,
@@ -65,7 +65,7 @@ def start_app(body):
     """one ship-apk run with every answer given up front"""
     if not SHIP_APK: return {"error": "ship-apk is not installed on this computer"}
     key, version, notes, mail = str(body.get("key", "")), str(body.get("version", "keep")), str(body.get("notes", "-")), bool(body.get("mail"))
-    if not key: return {"error": "which app?"}
+    if not key: return {"error": "Pick an app."}
     if version not in ("keep", "next") and not re.match(r"^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9]+)?$", version): return {"error": "a version like 1.2.3+4, or keep or next"}
     args = [SHIP_APK, "--app", key, "--version=" + version, "--fresh" if body.get("fresh", True) else "--last-build",
             "--notes", notes or "-", "--mail" if mail else "--no-mail", "--yes"] + (["--dry-run"] if body.get("dry") else [])
@@ -74,7 +74,7 @@ def start_domain(body):
     """connect or check a site's domain through ship-site, streamed like a publish"""
     if not SHIP_SITE: return {"error": "ship-site is not installed on this computer"}
     pid, op, dom = str(body.get("id", "")), body.get("op"), str(body.get("domain", "")).strip().lower()
-    if not pid or op not in ("connect", "check"): return {"error": "which project, and connect or check?"}
+    if not pid or op not in ("connect", "check"): return {"error": "Pick a project and connect or check."}
     if op == "connect" and not re.match(r"^([a-z0-9-]+\.)+[a-z]{2,}$", dom): return {"error": "that is not a domain; something like example.com or admin.example.com"}
     args = [SHIP_SITE, "--project", pid] + (["--domain", dom] if op == "connect" else ["--domain-check"]) + ["--yes"]
     return run(args, kind="domain", id=pid, op=op)
@@ -83,14 +83,14 @@ def people_edit(body):
     kind, pid, op = body.get("kind"), str(body.get("id", "")), body.get("op")
     role, email, name, subject = body.get("role", "to"), str(body.get("email", "")).strip(), str(body.get("name", "")).strip(), body.get("subject")
     if kind not in ("site", "app") or not pid or op not in ("add", "remove", "subject"): return {"error": "which project, and add, remove or subject?"}
-    if role not in ("to", "cc", "bcc"): return {"error": "role is to, cc or bcc"}
+    if role not in ("to", "cc", "bcc"): return {"error": "Choose To, CC or BCC."}
     if op in ("add", "remove") and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email): return {"error": "that is not an email address"}
     path = os.path.join(CONF, "ship-site" if kind == "site" else "ship-apk", "config.json")
     d = load("ship-site" if kind == "site" else "ship-apk", "config.json")
     if kind == "site":
         m = d.setdefault("mail", {}).setdefault(pid, {"to": [], "cc": [], "bcc": []})
     else:
-        if pid not in d.get("projects", {}): return {"error": "no such app"}
+        if pid not in d.get("projects", {}): return {"error": "This app is not in your list."}
         m = d["projects"][pid]
     if op == "subject": m["subject"] = str(subject or "")
     else:
@@ -177,7 +177,7 @@ def link_folder(body):
             d.setdefault("projects", {})[key] = {"path": f, "app": name.replace("_", " ").title(), "app_id": "", "user_id": "", "key": "", "to": [], "cc": [], "bcc": []}
             json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
             return {"ok": True, "id": key, "folder": f, "new": True}
-        if pid not in d.get("projects", {}): return {"error": "no such app"}
+        if pid not in d.get("projects", {}): return {"error": "This app is not in your list."}
         if op == "unlink":
             d["projects"][pid]["path"] = ""; json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600); return {"ok": True}
         f = choose_folder("The Flutter project of " + (d["projects"][pid].get("app") or pid) + " (pubspec.yaml)")
@@ -188,7 +188,7 @@ def link_folder(body):
         return {"ok": True, "id": pid, "folder": f}
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
     row = next((c for c in d.get("cache", []) if c["id"] == pid), None) if pid else None
-    if pid and not row: return {"error": "no such project"}
+    if pid and not row: return {"error": "This project is not in your list."}
     if op == "unlink":
         for f in [f for f, pr in d.get("projects", {}).items() if pr.get("id") == pid]: d["projects"].pop(f, None)
         json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600); return {"ok": True}
@@ -209,7 +209,7 @@ def app_edit(body):
     """an app's name, appho.st app id and credentials, in ship-apk's own config; a blank key keeps the saved one"""
     key = str(body.get("key", ""))
     d = load("ship-apk", "config.json"); path = os.path.join(CONF, "ship-apk", "config.json")
-    if key not in d.get("projects", {}): return {"error": "no such app"}
+    if key not in d.get("projects", {}): return {"error": "This app is not in your list."}
     p = d["projects"][key]
     for f in ("app", "app_id", "user_id"):
         if f in body: p[f] = str(body[f]).strip()
@@ -233,14 +233,14 @@ def mailbox_edit(body):
         if not smtp.get("host"): return {"error": "the SMTP host cannot be blank"}
     elif op == "template":
         kind = body.get("kind")
-        if kind not in ("site", "apk"): return {"error": "which template?"}
+        if kind not in ("site", "apk"): return {"error": "Pick a template."}
         subject, text = str(body.get("subject", "")).strip(), str(body.get("body", ""))
         if not subject or not text.strip(): return {"error": "subject and body are both needed"}
         d["template_" + kind] = {"subject": subject, "body": text}
         odd = sorted(set(re.findall(r"\{(\w+)\}", subject + text)) - {"name", "app", "version", "link", "notes", "sender"})
         if odd: note = "saved; {%s} is not filled in and stays as typed" % "} {".join(odd)
         else: note = ""
-    else: return {"error": "account or template?"}
+    else: return {"error": "Choose account or template."}
     os.makedirs(os.path.dirname(path), exist_ok=True); json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
     return {"ok": True, "note": locals().get("note", "")}
 def start_mail_test(body):
@@ -251,7 +251,7 @@ def start_mail_test(body):
 def account_label(body):
     """the label an account shows under; the id stays what the tools use"""
     host, aid, label = body.get("host"), str(body.get("id", "")).strip(), str(body.get("label", "")).strip()[:40]
-    if host not in ("vercel", "firebase") or not aid: return {"error": "which account?"}
+    if host not in ("vercel", "firebase") or not aid: return {"error": "Pick an account."}
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
     labels = d.setdefault("acct_labels", {})
     if label: labels[host + "|" + aid] = label
@@ -262,8 +262,8 @@ def start_account(body):
     """add or remove a Vercel or Firebase account through ship-site, streamed like any run"""
     if not SHIP_SITE: return {"error": "ship-site is not installed on this computer"}
     op, host, name = body.get("op"), body.get("host"), str(body.get("name", "")).strip()
-    if op not in ("add", "remove") or host not in ("vercel", "firebase"): return {"error": "add or remove, vercel or firebase?"}
-    if op == "remove" and not name: return {"error": "which account?"}
+    if op not in ("add", "remove") or host not in ("vercel", "firebase"): return {"error": "Choose add or remove for Vercel or Firebase."}
+    if op == "remove" and not name: return {"error": "Pick an account."}
     args, env = [SHIP_SITE, "accounts", op, host], {}
     if op == "add" and host == "vercel":
         token = str(body.get("token", "")).strip()
@@ -281,7 +281,7 @@ def updates():
     return {"tools": tools, "channel": rows.get("channel", "stable"), "latest": rows.get("latest", ""), "bin": "/usr/local/bin"}
 def set_channel(body):
     c = body.get("channel")
-    if c not in ("stable", "beta"): return {"error": "stable or beta?"}
+    if c not in ("stable", "beta"): return {"error": "Choose stable or beta."}
     r = subprocess.run([SELF, c], capture_output=True, text=True, env=dict(os.environ, TERM="dumb"))
     return {"ok": True} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[-200:]}
 def releases():
@@ -301,7 +301,7 @@ def start_update(body):
 def label_edit(body):
     pid, label = str(body.get("id", "")), str(body.get("label", "")).strip()[:40]
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
-    if not any(c["id"] == pid for c in d.get("cache", [])): return {"error": "no such project"}
+    if not any(c["id"] == pid for c in d.get("cache", [])): return {"error": "This project is not in your list."}
     labels = d.setdefault("labels", {})
     if label: labels[pid] = label
     else: labels.pop(pid, None)
@@ -313,7 +313,7 @@ def domain_edit(body):
     dom = re.sub(r"^https?://", "", dom).split("/")[0]; dom = re.sub(r"^www\.", "", dom)
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
     row = next((c for c in d.get("cache", []) if c["id"] == pid), None)
-    if not row: return {"error": "no such project"}
+    if not row: return {"error": "This project is not in your list."}
     if op in ("remove", "disconnect"):
         dom = d.get("domains", {}).get(pid, "")
         if op == "disconnect" and row.get("host") == "firebase" and dom:
@@ -396,11 +396,11 @@ def open_log(body):
     rid, want = str(body.get("run", "")), str(body.get("path", ""))
     if want:   # a path printed in a log: only files under the tools' config folder
         f = os.path.realpath(want)
-        if not f.startswith(os.path.realpath(CONF) + os.sep) or not os.path.isfile(f): return {"error": "not a log of ours"}
+        if not f.startswith(os.path.realpath(CONF) + os.sep) or not os.path.isfile(f): return {"error": "That file is not one of this tool's logs."}
         subprocess.Popen(["open", f] if sys.platform == "darwin" else ["xdg-open", f], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return {"ok": True}
-    if not re.match(r"^[0-9a-f-]+$", rid): return {"error": "no such run"}
+    if not re.match(r"^[0-9a-f-]+$", rid): return {"error": "That run is no longer kept."}
     f = os.path.join(RUNDIR, rid + ".log")
-    if not os.path.isfile(f): return {"error": "the log is gone"}
+    if not os.path.isfile(f): return {"error": "That log was deleted."}
     # a failed build names the tool's own build log (flutter's or npm's full output): that is the file worth reading
     try: txt = open(f, errors="replace").read()
     except Exception: txt = ""
@@ -420,7 +420,7 @@ def active_runs():
     return sorted(rows, key=lambda m: -m["started"])
 def status(rid):
     m = run_meta(rid) if re.match(r"^[0-9a-f-]+$", rid or "") else None
-    if not m: return {"error": "no such run"}
+    if not m: return {"error": "That run is no longer kept."}
     try: out = open(os.path.join(RUNDIR, rid + ".log"), errors="replace").read()
     except Exception: out = ""
     done, code = run_state(m)
