@@ -67,11 +67,14 @@ def ago(t):  # epoch -> "today", "3d ago", "2mo ago"; "" for none
     if d_ < 365: return "%dmo ago" % (d_ // 30)
     return "%dy ago" % (d_ // 365)
 
-if op == "projects":   # key path app app_id people count last
+if op == "projects":   # key path app app_id people count last account
     for k in sorted(d["projects"]):
         p = d["projects"][k]
         print("\x1f".join([k, p.get("path", ""), p.get("app", ""), p.get("app_id", ""), str(len(p.get("to", []))),
-                           str(p.get("count", "") or ""), ago(p.get("last"))]))
+                           str(p.get("count", "") or ""), ago(p.get("last")), d.get("accounts", {}).get(p.get("user_id", ""), "")]))
+elif op == "acct_name":  # user_id [name] -> the name of that appho.st account; with a name, sets it
+    if len(a) > 1: d.setdefault("accounts", {})[a[0]] = a[1]; save()
+    else: print(d.get("accounts", {}).get(a[0], ""))
 elif op == "hist_add":   # key version link mailed -> one record per shipped build, newest last; the row count and date follow
     import time
     now = int(time.time()); p = proj(a[0])
@@ -162,7 +165,7 @@ load_projects(){ # $1 current folder (optional) -> fills the app rows; HIT = row
   local here="${1:-}" note mail k path app id n cnt last st
   HIT=-1
   PROJ_KEYS=(); PROJ_PATHS=(); MENU_ITEMS=(); MENU_NOTES=()
-  while IFS=$'\x1f' read -r k path app id n cnt last; do   # \x1f, not a tab: bash collapses empty tab fields
+  while IFS=$'\x1f' read -r k path app id n cnt last acct; do   # \x1f, not a tab: bash collapses empty tab fields
     [ -n "$k" ] || continue
     PROJ_KEYS+=("$k"); PROJ_PATHS+=("$path")
     if   [ -n "$here" ] && [ "$path" = "$here" ]; then note="  ${G}● this folder${R}"; HIT=$(( ${#PROJ_KEYS[@]} - 1 ))
@@ -171,7 +174,7 @@ load_projects(){ # $1 current folder (optional) -> fills the app rows; HIT = row
     [ "$n" -gt 0 ] && mail="$n $([ "$n" = 1 ] && echo person || echo people)" || mail="no mail"
     st=""; [ -n "$cnt" ] && st="${cnt}× · ${last}"
     MENU_ITEMS+=("$(printf '%-22s' "${app:-$k}")")
-    MENU_NOTES+=("  ${D}$(printf '%-12s %-11s %-13s' "${id:0:10}" "$mail" "$st")${R}$note")
+    MENU_NOTES+=("  ${D}$(printf '%-12s %-11s %-13s %s' "${id:0:10}" "$mail" "$st" "${acct:+· $acct}")${R}$note")
   done < <(cfg projects)
 }
 
@@ -220,10 +223,11 @@ build_apk(){ # $1 root -> echoes the apk path on stdout, nothing else
     ( cd "$root" && $fl build apk --release ) >"$log" 2>&1 &
     pid=$!
     started=$(date +%s)
-    # one line, rewritten in place: elapsed time plus whatever gradle last said
+    # one line, rewritten in place: elapsed time plus whatever gradle last said, cut to the width there is
+    local w; w="$(tput cols 2>/dev/null || echo 120)"; [ "${w:-0}" -gt 40 ] || w=120
     while kill -0 "$pid" 2>/dev/null; do
       elapsed=$(( $(date +%s) - started ))
-      last="$(tr -d '\r' < "$log" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-52)"
+      last="$(tr -d '\r' < "$log" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-$(( w - 14 )))"
       printf "\r\033[K     ${A}▪${R} ${D}%3ds${R}  %s" "$elapsed" "$last" >&2
       sleep 1
     done
@@ -335,13 +339,18 @@ version_guard(){ # $1 key  $2 root  $3 version -> shows the version, bumps only 
   grep -q '^version: *[0-9]' "$root/pubspec.yaml" 2>/dev/null || { printf '%s' "$v"; return; }
   [ "$v" = "$(cfg proj_get "$key" last_version)" ] && repeat=yes
   step "Version  ${B}$v${R}$([ "$repeat" = yes ] && printf "  ${Y}shipped last time${R}")"
-  MENU_ITEMS=("ship as $v" "bump"); MENU_NOTES=("" "  ${D}next build is $(bump_version "$v" build), or type your own${R}")
-  [ "$(menu_pick "Version" -1 "$([ "$repeat" = yes ] && echo 1 || echo 0)")" = 0 ] && { printf '%s' "$v"; return; }
-  while :; do
-    nv="$(ask "New version" "$(bump_version "$v" build)")"
-    echo "$nv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9]+)?$' && break
-    warn "“${nv}” is not a version like 1.0.0+4"
-  done
+  if [ -n "$WANT_VERSION" ]; then   # answered up front: keep, next, or a version
+    case "$WANT_VERSION" in keep) printf '%s' "$v"; return ;; next) nv="$(bump_version "$v" build)" ;; *) nv="$WANT_VERSION" ;; esac
+    echo "$nv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9]+)?$' || { warn "“${nv}” is not a version like 1.0.0+4 — shipping as $v"; printf '%s' "$v"; return; }
+  else
+    MENU_ITEMS=("ship as $v" "bump"); MENU_NOTES=("" "  ${D}next build is $(bump_version "$v" build), or type your own${R}")
+    [ "$(menu_pick "Version" -1 "$([ "$repeat" = yes ] && echo 1 || echo 0)")" = 0 ] && { printf '%s' "$v"; return; }
+    while :; do
+      nv="$(ask "New version" "$(bump_version "$v" build)")"
+      echo "$nv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9]+)?$' && break
+      warn "“${nv}” is not a version like 1.0.0+4"
+    done
+  fi
   [ "$nv" = "$v" ] && { printf '%s' "$v"; return; }
   if [ "$DRY" = yes ]; then row "pubspec" "would become version: ${D}$v${R} → ${B}$nv${R}  ${D}(dry run, not written)${R}"; printf '%s' "$nv"; return; fi
   sed_i "s/^version:.*/version: $nv/" "$root/pubspec.yaml" || { warn "could not write pubspec.yaml"; printf '%s' "$v"; return; }
@@ -396,9 +405,14 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
   [ -f "$root/pubspec.yaml" ] || { warn "“${key}” points at ${root}, which has no pubspec.yaml — fix the folder under edit an app"; return 0; }
   version="$(proj_version "$root")"
   name="$(cfg proj_get "$key" app)"; [ -n "$name" ] || name="$key"
-  [ -n "$(cfg proj_get "$key" app_id)" ] || cfg proj_set "$key" app_id "$(ask "appho.st app id for “${name}”" "")"
-  [ -n "$(cfg proj_get "$key" app_id)" ] || { warn "no app id, nothing to upload to"; return 0; }
-  { [ -n "$(cfg proj_get "$key" user_id)" ] && [ -n "$(cfg proj_get "$key" key)" ]; } || credentials "$key"
+  if [ -n "$WANT_APP" ]; then
+    [ -n "$(cfg proj_get "$key" app_id)" ] || { warn "no appho.st app id for ${name} — add it in the terminal: ship-apk › edit an app"; return 1; }
+    { [ -n "$(cfg proj_get "$key" user_id)" ] && [ -n "$(cfg proj_get "$key" key)" ]; } || { warn "no appho.st credentials for ${name} — add them in the terminal: ship-apk › edit an app"; return 1; }
+  else
+    [ -n "$(cfg proj_get "$key" app_id)" ] || cfg proj_set "$key" app_id "$(ask "appho.st app id for “${name}”" "")"
+    [ -n "$(cfg proj_get "$key" app_id)" ] || { warn "no app id, nothing to upload to"; return 0; }
+    { [ -n "$(cfg proj_get "$key" user_id)" ] && [ -n "$(cfg proj_get "$key" key)" ]; } || credentials "$key"
+  fi
 
   printf "\n  ${D}%s${R}\n  ${B}%s${R}  ${D}%s${R}\n" "$RULE" "$name" "$version" >&2
 
@@ -416,9 +430,15 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
   fi
   MENU_ITEMS+=("← back to apps"); MENU_NOTES+=("")
   step "Build"
-  idx="$(menu_pick "Which build" $(( ${#MENU_ITEMS[@]} - 1 )) 0)"
-  [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 1 )) ] && return 0
-  local fresh=no; [ "$idx" -eq 0 ] && fresh=yes
+  local fresh=no
+  if [ -n "$WANT_BUILD" ]; then   # --fresh or --last-build
+    if [ "$WANT_BUILD" = last ] && [ -n "$apk" ]; then row "build" "the last one  ${D}$(fdate "$(fmtime "$apk")" '+%d %b %H:%M')  $(( $(fsize "$apk") / 1048576 )) MB  (from the command line)${R}"
+    else fresh=yes; row "build" "fresh  ${D}$(flutter_cmd "$root") build apk --release$([ "$WANT_BUILD" = last ] && echo '  — no last build for this version')  (from the command line)${R}"; fi
+  else
+    idx="$(menu_pick "Which build" $(( ${#MENU_ITEMS[@]} - 1 )) 0)"
+    [ "$idx" -eq $(( ${#MENU_ITEMS[@]} - 1 )) ] && return 0
+    [ "$idx" -eq 0 ] && fresh=yes
+  fi
 
   # 2. mail: send, set up what is missing (mailbox, then this app's email), or skip
   mail_step "$key" "$name"; want_mail="$MAIL"
@@ -430,6 +450,7 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
   if [ "$fresh" = yes ]; then apk="$(build_apk "$root")" || return 0; fi
   [ -n "$apk" ] || return 0
   until do_upload "$apk" "$key" "$name" "$version"; do
+    [ -n "$WANT_APP" ] && return 1
     MENU_ITEMS=("retry the upload" "back to apps" "quit"); MENU_NOTES=("  ${D}same APK, no rebuild${R}" "" "")
     case "$(menu_pick "Upload did not finish" 2 0)" in 1) return 0 ;; 2) return 1 ;; esac
   done
@@ -440,6 +461,7 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
 
   # 4. done — what next; when no mail went out, opening the APK folder comes first
   apkdir="$(dirname "$apk")"
+  [ -n "$WANT_APP" ] && { ok "shipped ${version}  ${D}${UPLOAD_LINK}${R}"; return 0; }
   [ "$want_mail" = no ] && idx=0 || idx=2
   while :; do
     MENU_ITEMS=("open the APK folder" "open the link in the browser" "back to apps" "quit")
@@ -478,7 +500,9 @@ credentials(){ # $1 project key
   sub "both come from the app's page on appho.st › Private API › download config"
   cfg proj_set "$1" user_id "$(ask "user_id" "$(cfg proj_get "$1" user_id)")"
   cfg proj_set "$1" key     "$(ask "API key" "$(cfg proj_get "$1" key)")"
-  ok "saved"
+  local uid nm; uid="$(cfg proj_get "$1" user_id)"; nm="$(cfg acct_name "$uid")"
+  [ -n "$nm" ] || { sub "appho.st allows five apps per account, so a name tells them apart in the list and on the web page"; nm="$(ask "a name for this appho.st account" "${uid:0:6}")"; [ -n "$nm" ] && cfg acct_name "$uid" "$nm"; }
+  ok "saved$([ -n "$nm" ] && echo " · account ${nm}")"
 }
 
 
@@ -514,13 +538,24 @@ edit_app(){ # $1 project key -> everything about one app in one place; returns 1
 }
 
 # ── main ──────────────────────────────────────────────────────────────────
+WANT_APP=""; WANT_VERSION=""; WANT_BUILD=""   # --app <key> picks the app; --version, --fresh/--last-build, --mail, --notes answer the steps
 main(){
   DRY=no; VERBOSE=no
   local arg ROOT="" HERE="" idx sel n napps
-  for arg in "$@"; do
+  while [ $# -gt 0 ]; do
+    arg="$1"; shift
     case "$arg" in
       --dry-run|-n) DRY=yes ;;
       --verbose)    VERBOSE=yes ;;
+      --app)        WANT_APP="${1:-}"; shift ;;
+      --version=*)  WANT_VERSION="${arg#*=}" ;;
+      --fresh)      WANT_BUILD=fresh ;;
+      --last-build) WANT_BUILD=last ;;
+      --notes)      WANT_NOTES="${1:--}"; shift ;;
+      --no-notes)   WANT_NOTES="-" ;;
+      --mail)       WANT_MAIL=yes ;;
+      --no-mail)    WANT_MAIL=no ;;
+      --yes|-y)     YES=yes ;;
       --version|-V|-v) echo "ship-apk $VERSION"; exit 0 ;;
       config|-c)    banner "ship-apk $VERSION" "mail account"; smtp_menu; exit 0 ;;
       -h|--help)
@@ -529,18 +564,33 @@ main(){
         printf "    ${A}ship-apk --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
         printf "    ${A}ship-apk --verbose${R}   stream the full build log instead of one line\n"
         printf "    ${A}ship-apk config${R}      mail account and template\n\n"
+        printf "  ${B}Without questions${R}  ${D}for scripts and the web page: every answer given up front${R}\n"
+        printf "    ${A}--app <key>${R}           the app, by the key the list and history show\n"
+        printf "    ${A}--version=keep|next|X${R} ship as is, raise the build number, or set a version\n"
+        printf "    ${A}--fresh${R} / ${A}--last-build${R}  build now, or upload the APK already in build/\n"
+        printf "    ${A}--notes <text>${R}        what changed, for the mail; ${A}--notes git${R} takes the commit titles; ${A}--no-notes${R}\n"
+        printf "    ${A}--mail${R} / ${A}--no-mail${R}      send the link to the app's people, or not\n"
+        printf "    ${A}--yes${R}                 take every confirmation as yes\n"
+        printf "  ${D}  ship-apk --app thoub --version=next --fresh --mail --notes git --yes${R}\n\n"
         printf "  ${D}Run it inside a Flutter project and that app is preselected, or offered to add.\n"
         printf "  Settings and logs live in %s${R}\n\n" "$CONF"
         exit 0 ;;
     esac
   done
 
-  [ -t 0 ] || die "ship-apk needs a terminal — run it, do not pipe into it"
+  [ -t 0 ] || [ -n "$WANT_APP" ] || die "ship-apk needs a terminal — run it, do not pipe into it; without one, say everything with --app and friends"
   have python3 || die "python3 is required (it ships with macOS developer tools)."
   cfg projects >/dev/null   # creates config.json on first run
   banner "ship-apk $VERSION" "build it, ship it, mail the link"
   [ "$DRY" = yes ] && sub "${Y}dry run — checks everything, then shows what it would do; nothing is built, uploaded, mailed or written${R}"
   ROOT="$(find_root)" || ROOT=""
+  if [ -n "$WANT_APP" ]; then   # straight to the ship: the app by key, every step answered by flags
+    load_projects ""
+    n=-1; for idx in "${!PROJ_KEYS[@]}"; do [ "${PROJ_KEYS[$idx]}" = "$WANT_APP" ] && n=$idx; done
+    [ "$n" -ge 0 ] || die "no app with key “${WANT_APP}” — run ship-apk and add it, or check the key"
+    [ -n "$WANT_BUILD" ] || die "say --fresh or --last-build with --app"
+    ship "${PROJ_KEYS[$n]}" "${PROJ_PATHS[$n]}"; exit $?
+  fi
 
   while :; do
     load_projects "$ROOT"; HERE=$HIT

@@ -1,4 +1,4 @@
-import json, os, re, sys, time, html, subprocess, tempfile, threading
+import json, os, re, sys, time, html, subprocess
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -30,7 +30,6 @@ def pubspec_version(folder):
 def tool_version(path):
     v = sh([path, "--version"]) if path else ""
     return v.split()[-1] if v else ""
-RUNS, LOCK = {}, threading.Lock()   # publishes started from the page: id -> (process, log file)
 def start(body):
     """one ship-site run with every answer given up front; returns the run id or an error"""
     if not SHIP_SITE: return {"error": "ship-site is not installed on this computer"}
@@ -41,10 +40,25 @@ def start(body):
     if target == "test": version = "keep"
     args = [SHIP_SITE, "--project", pid, "--prod" if target == "main" else "--preview", "--version=" + version,
             "--notes", notes or "-", "--mail" if mail else "--no-mail", "--yes"] + (["--dry-run"] if body.get("dry") else []) + ([folder] if folder else [])
-    log = tempfile.NamedTemporaryFile(prefix="devtools-run-", suffix=".log", delete=False)
-    proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ, TERM="dumb"))
-    with LOCK: rid = str(len(RUNS) + 1); RUNS[rid] = (proc, log.name)
-    return {"run": rid, "command": " ".join(a if a else "''" for a in args[1:])}
+    return run(args, kind="publish", id=pid, dry=bool(body.get("dry")))
+def last_apk(root):
+    """the newest release APK inside a Flutter project, as 'date · size', or ''"""
+    try:
+        import glob
+        fs = glob.glob(os.path.join(root, "build", "app", "outputs", "**", "*release*.apk"), recursive=True)
+        if not fs: return ""
+        f = max(fs, key=os.path.getmtime); st = os.stat(f)
+        return time.strftime("%d %b %H:%M", time.localtime(st.st_mtime)) + " · %d MB" % (st.st_size // 1048576)
+    except Exception: return ""
+def start_app(body):
+    """one ship-apk run with every answer given up front"""
+    if not SHIP_APK: return {"error": "ship-apk is not installed on this computer"}
+    key, version, notes, mail = str(body.get("key", "")), str(body.get("version", "keep")), str(body.get("notes", "-")), bool(body.get("mail"))
+    if not key: return {"error": "which app?"}
+    if version not in ("keep", "next") and not re.match(r"^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9]+)?$", version): return {"error": "a version like 1.2.3+4, or keep or next"}
+    args = [SHIP_APK, "--app", key, "--version=" + version, "--fresh" if body.get("fresh", True) else "--last-build",
+            "--notes", notes or "-", "--mail" if mail else "--no-mail", "--yes"] + (["--dry-run"] if body.get("dry") else [])
+    return run(args, kind="ship", id=key, dry=bool(body.get("dry")))
 def start_domain(body):
     """connect or check a site's domain through ship-site, streamed like a publish"""
     if not SHIP_SITE: return {"error": "ship-site is not installed on this computer"}
@@ -52,10 +66,7 @@ def start_domain(body):
     if not pid or op not in ("connect", "check"): return {"error": "which project, and connect or check?"}
     if op == "connect" and not re.match(r"^([a-z0-9-]+\.)+[a-z]{2,}$", dom): return {"error": "that is not a domain; something like example.com or admin.example.com"}
     args = [SHIP_SITE, "--project", pid] + (["--domain", dom] if op == "connect" else ["--domain-check"]) + ["--yes"]
-    log = tempfile.NamedTemporaryFile(prefix="devtools-run-", suffix=".log", delete=False)
-    proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ, TERM="dumb"))
-    with LOCK: rid = str(len(RUNS) + 1); RUNS[rid] = (proc, log.name)
-    return {"run": rid}
+    return run(args, kind="domain", id=pid, op=op)
 def people_edit(body):
     """add or remove a recipient, or set the subject, for a site (ship-site config, mail[id]) or an app (ship-apk config, projects[key])"""
     kind, pid, op = body.get("kind"), str(body.get("id", "")), body.get("op")
@@ -143,6 +154,27 @@ def folder_says(f):
 def link_folder(body):
     """pick a folder in the Finder and link it to a project: the given one, or the one the folder's config names"""
     pid, op = str(body.get("id", "")), body.get("op", "pick")
+    if body.get("kind") == "app":   # an app's folder: the Flutter project ship-apk builds; no key = a new app from its folder, like the terminal's add_app
+        d = load("ship-apk", "config.json"); path = os.path.join(CONF, "ship-apk", "config.json")
+        if not pid:
+            f = choose_folder("The Flutter project to add (pubspec.yaml)")
+            if not f: return {"cancelled": True}
+            if not os.path.isfile(os.path.join(f, "pubspec.yaml")): return {"error": "no pubspec.yaml in " + f.replace(os.path.expanduser("~"), "~")}
+            key = os.path.basename(f)
+            if key in d.get("projects", {}): return {"error": "%s is already in the list" % key}
+            name = next((l.split(":", 1)[1].strip() for l in open(os.path.join(f, "pubspec.yaml")) if l.startswith("name:")), key)
+            d.setdefault("projects", {})[key] = {"path": f, "app": name.replace("_", " ").title(), "app_id": "", "user_id": "", "key": "", "to": [], "cc": [], "bcc": []}
+            json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
+            return {"ok": True, "id": key, "folder": f, "new": True}
+        if pid not in d.get("projects", {}): return {"error": "no such app"}
+        if op == "unlink":
+            d["projects"][pid]["path"] = ""; json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600); return {"ok": True}
+        f = choose_folder("The Flutter project of " + (d["projects"][pid].get("app") or pid) + " (pubspec.yaml)")
+        if not f: return {"cancelled": True}
+        if not os.path.isfile(os.path.join(f, "pubspec.yaml")): return {"error": "no pubspec.yaml in " + f.replace(os.path.expanduser("~"), "~")}
+        d["projects"][pid]["path"] = f
+        json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
+        return {"ok": True, "id": pid, "folder": f}
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
     row = next((c for c in d.get("cache", []) if c["id"] == pid), None) if pid else None
     if pid and not row: return {"error": "no such project"}
@@ -162,6 +194,19 @@ def link_folder(body):
     d.setdefault("projects", {})[f] = dict(d["projects"].get(f, {}), account=row["account"], id=row["id"], name=row["name"], host=row.get("host", "vercel"))
     json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
     return {"ok": True, "id": row["id"], "folder": f}
+def app_edit(body):
+    """an app's name, appho.st app id and credentials, in ship-apk's own config; a blank key keeps the saved one"""
+    key = str(body.get("key", ""))
+    d = load("ship-apk", "config.json"); path = os.path.join(CONF, "ship-apk", "config.json")
+    if key not in d.get("projects", {}): return {"error": "no such app"}
+    p = d["projects"][key]
+    for f in ("app", "app_id", "user_id"):
+        if f in body: p[f] = str(body[f]).strip()
+    if "api_key" in body: p["key"] = str(body["api_key"]).strip()
+    if "account" in body and p.get("user_id"): d.setdefault("accounts", {})[p["user_id"]] = str(body["account"]).strip()
+    if not p.get("app_id"): return {"error": "the appho.st app id cannot be blank"}
+    json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
+    return {"ok": True}
 def label_edit(body):
     pid, label = str(body.get("id", "")), str(body.get("label", "")).strip()[:40]
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
@@ -214,14 +259,48 @@ def domain_edit(body):
     else: res["state"] = "reminder"; res["note"] = "Vercel domains are added on vercel.com, which shows its records; the name is kept here as a reminder"
     json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
     return res
+RUNDIR = os.path.join(CONF, "developer-tools", "runs")
+def run(args, **meta):
+    """start a tool detached from this server, its output in RUNDIR/<id>.log and its exit code in <id>.code when it ends;
+    the run is listed in /api/data until then, so a reloaded page (or a restarted server) picks it up"""
+    os.makedirs(RUNDIR, exist_ok=True)
+    for f in os.listdir(RUNDIR):   # a week of runs is plenty
+        fp = os.path.join(RUNDIR, f)
+        if time.time() - os.path.getmtime(fp) > 7 * 86400: os.remove(fp)
+    rid = time.strftime("%Y%m%d-%H%M%S") + "-%04x" % (int(time.time() * 1000) % 65536)
+    base = os.path.join(RUNDIR, rid)
+    log = open(base + ".log", "w")
+    proc = subprocess.Popen(["bash", "-c", '"$@"; echo $? > "$CODE"', "run"] + args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                            env=dict(os.environ, TERM="dumb", CODE=base + ".code"), start_new_session=True)
+    meta = dict(meta, run=rid, started=time.time(), pid=proc.pid, command=" ".join(a if a else "''" for a in args))
+    json.dump(meta, open(base + ".json", "w"))
+    return {"run": rid, "command": meta["command"]}
+def alive(pid):
+    try: os.kill(pid, 0); return True
+    except Exception: return False
+def run_meta(rid):
+    try: return json.load(open(os.path.join(RUNDIR, rid + ".json")))
+    except Exception: return None
+def run_state(meta):
+    """(done, code): the code file says it ended; a dead process with no code file crashed"""
+    try: return True, int(open(os.path.join(RUNDIR, meta["run"] + ".code")).read().strip() or 1)
+    except Exception: return (False, None) if alive(meta.get("pid", 0)) else (True, 1)
+def active_runs():
+    """every run still going, newest first"""
+    rows = []
+    try: names = sorted(f[:-5] for f in os.listdir(RUNDIR) if f.endswith(".json"))
+    except Exception: names = []
+    for rid in names[-20:]:
+        m = run_meta(rid)
+        if m and not run_state(m)[0]: rows.append(m)
+    return sorted(rows, key=lambda m: -m["started"])
 def status(rid):
-    with LOCK: r = RUNS.get(rid)
-    if not r: return {"error": "no such run"}
-    proc, path = r
-    try: out = open(path, errors="replace").read()
+    m = run_meta(rid) if re.match(r"^[0-9a-f-]+$", rid or "") else None
+    if not m: return {"error": "no such run"}
+    try: out = open(os.path.join(RUNDIR, rid + ".log"), errors="replace").read()
     except Exception: out = ""
-    code = proc.poll()
-    return {"out": out, "done": code is not None, "code": code}
+    done, code = run_state(m)
+    return {"out": out, "done": done, "code": code}
 def load(*p):
     try: return json.load(open(os.path.join(CONF, *p)))
     except Exception: return {}
@@ -253,7 +332,7 @@ def data():
     for k, p in sorted(a.get("projects", {}).items()):
         apps.append(dict(key=k, app=p.get("app") or k, path=p.get("path", ""), app_id=p.get("app_id", ""), count=p.get("count", 0),
                          last=ago(p.get("last")), history=hist(p.get("history")), version=pubspec_version(p.get("path", "")), commits=commits(p.get("path", "")),
-                         creds=bool(p.get("user_id") and p.get("key")),
+                         creds=bool(p.get("user_id") and p.get("key")), user_id=p.get("user_id", ""), api_key=p.get("key", ""), account=a.get("accounts", {}).get(p.get("user_id", ""), ""), last_apk=last_apk(p.get("path", "")),
                          mail={f: p.get(f, []) for f in ("to", "cc", "bcc")} | {"subject": p.get("subject", "")}))
     smtp = m.get("smtp", {})
     box = dict(user=smtp.get("user", ""), host=smtp.get("host", ""), port=smtp.get("port", ""), from_name=smtp.get("from_name", ""),
@@ -264,7 +343,7 @@ def data():
     accounts += [dict(name=e, scope="", team="", host="Firebase") for e in s.get("fb_accounts", [])]
     tpl = dict(site=m.get("template_site", {}), apk=m.get("template_apk", {}))
     return dict(sites=sites, apps=apps, mailbox=box, templates=tpl, accounts=accounts, vercel_accounts=sorted(s.get("accounts", {})), firebase_accounts=s.get("fb_accounts", []),
-                can_publish=bool(SHIP_SITE), hub_version=HUB_VERSION, port=PORT, channel=channel, page=page_hash(),
+                can_publish=bool(SHIP_SITE), can_ship=bool(SHIP_APK), active=active_runs(), hub_version=HUB_VERSION, port=PORT, channel=channel, page=page_hash(),
                 tools=[dict(name="ship-site", what="Build a web app and publish it to Vercel or Firebase", version=tool_version(SHIP_SITE)),
                        dict(name="ship-apk", what="Build a Flutter APK, upload it to appho.st, mail the link", version=tool_version(SHIP_APK)),
                        dict(name="developer-tools", what="The hub, and this page", version=HUB_VERSION)])
@@ -293,11 +372,20 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/people": return self.send(200, json.dumps(people_edit(body)).encode(), "application/json")
         if u.path == "/api/domain": return self.send(200, json.dumps(domain_edit(body)).encode(), "application/json")
         if u.path == "/api/domain_run": return self.send(200, json.dumps(start_domain(body)).encode(), "application/json")
+        if u.path == "/api/ship": return self.send(200, json.dumps(start_app(body)).encode(), "application/json")
         if u.path == "/api/label": return self.send(200, json.dumps(label_edit(body)).encode(), "application/json")
         if u.path == "/api/link": return self.send(200, json.dumps(link_folder(body)).encode(), "application/json")
+        if u.path == "/api/app": return self.send(200, json.dumps(app_edit(body)).encode(), "application/json")
         self.send(404, b"not found", "text/plain")
 
-srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+UI = os.path.join(CONF, "developer-tools", "ui.json")
+try: want = int(json.load(open(UI)).get("port", 0))
+except Exception: want = 0
+try: srv = ThreadingHTTPServer(("127.0.0.1", want), H)
+except OSError: srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 PORT = srv.server_address[1]
+try:
+    os.makedirs(os.path.dirname(UI), exist_ok=True); json.dump({"port": PORT, "token": TOKEN}, open(UI, "w")); os.chmod(UI, 0o600)
+except Exception: pass
 print("URL\thttp://127.0.0.1:%d/?t=%s" % (PORT, TOKEN), flush=True)
 srv.serve_forever()

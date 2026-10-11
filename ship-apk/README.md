@@ -181,3 +181,21 @@ bash, python3 and curl (built in on macOS and Linux; Git Bash plus Python on Win
 | Build and send logs | `~/.config/ship-apk/logs/` |
 
 The only file it ever changes in your project is the `version:` line of `pubspec.yaml`, and only when you pick **bump**. The free appho.st tier rejects APKs over 100 MB; you are warned before the upload.
+
+## Without questions
+
+For scripts and the web page: every answer given up front, nothing asked.
+
+```sh
+ship-apk --app thoub --version=next --fresh --mail --notes git --yes
+```
+
+| Flag | Answers |
+| --- | --- |
+| `--app <key>` | which app, by the key the list and `history` show |
+| `--version=keep`, `--version=next`, `--version=1.2.0+7` | ship as is, raise the build number, or set a version |
+| `--fresh` / `--last-build` | build now, or upload the APK already in `build/` (falls back to a fresh build when there is none) |
+| `--notes <text>`, `--notes git`, `--no-notes` | what changed, for the mail |
+| `--mail` / `--no-mail` | send the link to the app's people, or not |
+| `--yes` | every confirmation taken as yes; no done screen afterwards |
+| `--dry-run` | with any of the above: checks everything, changes nothing |
