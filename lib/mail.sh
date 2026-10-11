@@ -81,12 +81,15 @@ sender_name = s.get("from_name") or s["user"]
 fields = dict(name=" and ".join([", ".join(names[:-1]), names[-1]]) if len(names) > 1 else names[0],
               app=app, version=version, link=link, sender=sender_name,
               notes=("\n\nWhat changed:\n" + notes) if notes.strip() else "")
+import re
+def render(t):   # only the known placeholders are filled; anything else, a typo or a stray brace, stays as typed
+    return re.sub(r"\{(\w+)\}", lambda mm: str(fields.get(mm.group(1), mm.group(0))), t or "")
 m = EmailMessage()
-m["Subject"] = (p.get("subject") or tpl["subject"]).format(**fields)
+m["Subject"] = render(p.get("subject") or tpl["subject"])
 m["From"] = formataddr((sender_name, s.get("user", "")))
 m["To"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in to)
 if cc: m["Cc"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in cc)
-m.set_content(tpl["body"].format(**fields))
+m.set_content(render(tpl["body"]))
 
 if dry:
     print("-" * 60)
@@ -146,17 +149,18 @@ log_send(){ # project · version · link · how many were mailed
   printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M')" "$2" "$4" "$3" >> "$LOGS/$1.log"
 }
 
-smtp_test(){
+smtp_test(){ # [$1 address] -> sends the test there; asks when no address is given
   local to result
-  [ "$(mbox smtp_ready)" = yes ] || { warn "fill in address, password and host first"; return; }
-  to="$(ask "Send the test to" "$(mbox smtp_get user)")"
+  [ "$(mbox smtp_ready)" = yes ] || { warn "fill in address, password and host first"; return 1; }
+  to="${1:-$(ask "Send the test to" "$(mbox smtp_get user)")}"
   [ -n "$to" ] || return
   step "Sending test"
-  result="$(MAIL_REC="{\"to\":[{\"name\":\"you\",\"email\":\"$to\"}]}" send_mail - "developer-tools" "0.0.0" "https://github.com/azharbinanwar/developer-tools" "- this is a test")"
+  # the real template, filled with the tool itself, so the mail shows what people will get
+  result="$(MAIL_REC="{\"to\":[{\"name\":\"${to%@*}\",\"email\":\"$to\"}]}" send_mail - "developer-tools" "${VERSION:-test}" "https://github.com/azharbinanwar/developer-tools" "- a test of the mailbox from developer-tools $(date '+%d %b %H:%M'); real mails use the site or APK template with the project's own details")"
   case "$result" in
     OK*) ok "delivered — check $to (and its spam folder)" ;;
-    FAIL*) warn "$(printf '%s' "$result" | cut -f2)" ;;
-    *) warn "no recipients" ;;
+    FAIL*) warn "$(printf '%s' "$result" | cut -f2)"; return 1 ;;
+    *) warn "no recipients"; return 1 ;;
   esac
 }
 

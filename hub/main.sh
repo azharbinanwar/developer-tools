@@ -1,4 +1,4 @@
-# needs: platform ui keys web
+# needs: platform ui keys mail web
 # developer-tools: the hub. Run any tool online, or install, update and remove them.
 #
 #   bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tools/main/developer-tools)
@@ -126,7 +126,7 @@ run_tool(){ # $1 tool -> installed copy if any, otherwise the latest release fro
 
 main(){
   case "${1:-}" in
-    --version|-V|-v) echo "developer-tools $VERSION"; exit 0 ;;
+    --version|-V) echo "developer-tools $VERSION"; exit 0 ;;
     -h|--help)
       printf "\n  ${B}developer-tools${R} ${D}%s${R}\n\n" "$VERSION"
       printf "    ${A}developer-tools${R}              menu: run a tool, install, update or remove tools\n"
@@ -134,10 +134,15 @@ main(){
       printf "    ${A}developer-tools beta install${R} switch this Mac to the beta channel and install the newest beta\n"
       printf "    ${A}developer-tools stable install${R} back to the stable release\n"
       printf "    ${A}developer-tools <tool>${R}       run one tool (ship-apk, ship-site)\n"
-      printf "    ${A}developer-tools ui${R}           a local web page over both tools: publish a site, its domain, history, mail, folders\n\n"
+      printf "    ${A}developer-tools ui${R}           a local web page over both tools: publish a site, its domain, history, mail, folders\n"
+      printf "    ${A}developer-tools mailbox${R}      the account the links are mailed from; ${A}mailbox test <address>${R} sends a test there\n\n"
       printf "  ${D}Tools install to %s and keep their settings in ~/.config/<tool>/${R}\n\n" "$BIN"
       exit 0 ;;
     ui)      banner "developer-tools $VERSION" "web page"; ui_serve "${2:-}"; exit 0 ;;
+    mailbox) banner "developer-tools $VERSION" "mailbox"
+             if [ "${2:-}" = test ]; then smtp_test "${3:-}"; exit $?; fi
+             [ -t 0 ] || die "needs a terminal; or: developer-tools mailbox test <address>"
+             { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
     install) banner "developer-tools $VERSION" "installing everything  · $(channel) channel"
              resolve_base; install_picked $(seq 0 $(( ${#TOOLS[@]} - 1 ))); printf "\n" >&2; exit 0 ;;
     beta|stable) set_channel "$1"

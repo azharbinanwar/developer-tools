@@ -15,9 +15,20 @@ def page_hash():
 def sh(args, cwd=None):
     try: return subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=3).stdout.strip()
     except Exception: return ""
-def commits(folder):   # the last few commit titles, for the notes step
+def commits(folder, since=""):
+    """the last 15 commit titles for the Notes pick, newest first; `new` marks those after the commit the last mail was sent at.
+    Read here when the page loads, never while sending: a send carries plain text and does not need git."""
     if not folder or not os.path.isdir(os.path.join(folder, ".git")): return []
-    return [l for l in sh(["git", "log", "-5", "--format=%s"], folder).splitlines() if l]
+    rows = [l.split("\t", 1) for l in sh(["git", "log", "-15", "--format=%H\t%s"], folder).splitlines() if "\t" in l]
+    seen_since = False; out = []
+    for sha, title in rows:
+        if since and sha == since: seen_since = True
+        out.append({"title": title, "new": not seen_since and bool(since) and sha != since})
+    if since and not seen_since:   # the remembered commit is not in the last 15 (or gone): everything counts as new
+        for r in out: r["new"] = True
+    if not since:
+        for r in out[:5]: r["new"] = True
+    return out
 def pkg_version(folder):
     try: return json.load(open(os.path.join(folder, "package.json"))).get("version", "")
     except Exception: return ""
@@ -207,6 +218,36 @@ def app_edit(body):
     if not p.get("app_id"): return {"error": "the appho.st app id cannot be blank"}
     json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
     return {"ok": True}
+def mailbox_edit(body):
+    """the sending account and the two templates, in the shared mail.json; a blank password keeps the saved one"""
+    path = os.path.join(CONF, "developer-tools", "mail.json"); d = load("developer-tools", "mail.json")
+    op = body.get("op", "account")
+    if op == "account":
+        smtp = d.setdefault("smtp", {})
+        user = str(body.get("user", "")).strip()
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", user): return {"error": "that is not an email address"}
+        port = str(body.get("port", "")).strip() or "465"
+        if port not in ("465", "587", "25", "2525"): return {"error": "port is 465 (SSL) or 587 (STARTTLS)"}
+        smtp.update(user=user, host=str(body.get("host", "")).strip(), port=port, from_name=str(body.get("from_name", "")).strip() or user.split("@")[0])
+        if str(body.get("password", "")): smtp["password"] = str(body["password"])
+        if not smtp.get("host"): return {"error": "the SMTP host cannot be blank"}
+    elif op == "template":
+        kind = body.get("kind")
+        if kind not in ("site", "apk"): return {"error": "which template?"}
+        subject, text = str(body.get("subject", "")).strip(), str(body.get("body", ""))
+        if not subject or not text.strip(): return {"error": "subject and body are both needed"}
+        d["template_" + kind] = {"subject": subject, "body": text}
+        odd = sorted(set(re.findall(r"\{(\w+)\}", subject + text)) - {"name", "app", "version", "link", "notes", "sender"})
+        if odd: note = "saved; {%s} is not filled in and stays as typed" % "} {".join(odd)
+        else: note = ""
+    else: return {"error": "account or template?"}
+    os.makedirs(os.path.dirname(path), exist_ok=True); json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
+    return {"ok": True, "note": locals().get("note", "")}
+def start_mail_test(body):
+    """send a test mail to one address through ship-site, streamed like any run"""
+    to = str(body.get("to", "")).strip()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", to): return {"error": "that is not an email address"}
+    return run([SELF, "mailbox", "test", to], kind="mailtest", id="mailbox")
 def label_edit(body):
     pid, label = str(body.get("id", "")), str(body.get("label", "")).strip()[:40]
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
@@ -272,7 +313,8 @@ def run(args, **meta):
     log = open(base + ".log", "w")
     proc = subprocess.Popen(["bash", "-c", '"$@"; echo $? > "$CODE"', "run"] + args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                             env=dict(os.environ, TERM="dumb", CODE=base + ".code"), start_new_session=True)
-    meta = dict(meta, run=rid, started=time.time(), pid=proc.pid, command=" ".join(a if a else "''" for a in args))
+    import shlex
+    meta = dict(meta, run=rid, started=time.time(), pid=proc.pid, command=" ".join(shlex.quote(a) for a in args))
     json.dump(meta, open(base + ".json", "w"))
     return {"run": rid, "command": meta["command"]}
 def alive(pid):
@@ -355,7 +397,7 @@ def data():
         st, mm = stats.get(c["id"], {}), mail.get(c["id"], {})
         f = folders.get(c["id"], "")
         sites.append(dict(account=c["account"], host=h, id=c["id"], name=c["name"], url=c["url"], project=c.get("project", ""),
-                          label=labels.get(c["id"], ""), folder=f, count=st.get("count", 0), last=ago(st.get("last")), version=pkg_version(f), commits=commits(f),
+                          label=labels.get(c["id"], ""), folder=f, count=st.get("count", 0), last=ago(st.get("last")), version=pkg_version(f), commits=commits(f, mm.get("last_sha", "")),
                           static=bool(f) and not (json.load(open(os.path.join(f, "package.json"))).get("scripts", {}).get("build") if os.path.exists(os.path.join(f, "package.json")) else False),
                           domain=doms.get(c["id"], ""), domain_state=dstate.get(c["id"], ""), history=hist(history.get(c["id"])), runs=page_runs("publish", c["id"]),
                           mail={k: mm.get(k, []) for k in ("to", "cc", "bcc")} | {"subject": mm.get("subject", "")}))
@@ -363,11 +405,11 @@ def data():
     apps = []
     for k, p in sorted(a.get("projects", {}).items()):
         apps.append(dict(key=k, app=p.get("app") or k, path=p.get("path", ""), app_id=p.get("app_id", ""), count=p.get("count", 0),
-                         last=ago(p.get("last")), history=hist(p.get("history")), runs=page_runs("ship", k), version=pubspec_version(p.get("path", "")), commits=commits(p.get("path", "")),
+                         last=ago(p.get("last")), history=hist(p.get("history")), runs=page_runs("ship", k), version=pubspec_version(p.get("path", "")), commits=commits(p.get("path", ""), p.get("last_sha", "")),
                          creds=bool(p.get("user_id") and p.get("key")), user_id=p.get("user_id", ""), api_key=p.get("key", ""), account=a.get("accounts", {}).get(p.get("user_id", ""), ""), last_apk=last_apk(p.get("path", "")),
                          mail={f: p.get(f, []) for f in ("to", "cc", "bcc")} | {"subject": p.get("subject", "")}))
     smtp = m.get("smtp", {})
-    box = dict(user=smtp.get("user", ""), host=smtp.get("host", ""), port=smtp.get("port", ""), from_name=smtp.get("from_name", ""),
+    box = dict(user=smtp.get("user", ""), host=smtp.get("host", ""), port=smtp.get("port", ""), from_name=smtp.get("from_name", ""), password=smtp.get("password", ""),
                ready=bool(smtp.get("host") and smtp.get("user") and smtp.get("password")))
     try: channel = open(os.path.join(CONF, "developer-tools", "channel")).read().strip() or "stable"
     except Exception: channel = "stable"
@@ -409,6 +451,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/link": return self.send(200, json.dumps(link_folder(body)).encode(), "application/json")
         if u.path == "/api/app": return self.send(200, json.dumps(app_edit(body)).encode(), "application/json")
         if u.path == "/api/open_log": return self.send(200, json.dumps(open_log(body)).encode(), "application/json")
+        if u.path == "/api/mailbox": return self.send(200, json.dumps(mailbox_edit(body)).encode(), "application/json")
+        if u.path == "/api/mail_test": return self.send(200, json.dumps(start_mail_test(body)).encode(), "application/json")
         self.send(404, b"not found", "text/plain")
 
 UI = os.path.join(CONF, "developer-tools", "ui.json")

@@ -28,7 +28,7 @@ ship-site --dry-run    check everything and show what would happen; changes noth
 ship-site ~/site       treat that folder as the current project
 ship-site accounts     add or remove Vercel and Firebase accounts
 ship-site mailbox      the account the link is mailed from, shared with ship-apk
-ship-site -v           version
+ship-site -V           version · short flags combine: -ny is -n -y
 ```
 
 ### Without questions

@@ -365,12 +365,15 @@ sender_name = s.get("from_name") or s["user"]
 fields = dict(name=" and ".join([", ".join(names[:-1]), names[-1]]) if len(names) > 1 else names[0],
               app=app, version=version, link=link, sender=sender_name,
               notes=("\n\nWhat changed:\n" + notes) if notes.strip() else "")
+import re
+def render(t):   # only the known placeholders are filled; anything else, a typo or a stray brace, stays as typed
+    return re.sub(r"\{(\w+)\}", lambda mm: str(fields.get(mm.group(1), mm.group(0))), t or "")
 m = EmailMessage()
-m["Subject"] = (p.get("subject") or tpl["subject"]).format(**fields)
+m["Subject"] = render(p.get("subject") or tpl["subject"])
 m["From"] = formataddr((sender_name, s.get("user", "")))
 m["To"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in to)
 if cc: m["Cc"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in cc)
-m.set_content(tpl["body"].format(**fields))
+m.set_content(render(tpl["body"]))
 
 if dry:
     print("-" * 60)
@@ -430,17 +433,18 @@ log_send(){ # project · version · link · how many were mailed
   printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M')" "$2" "$4" "$3" >> "$LOGS/$1.log"
 }
 
-smtp_test(){
+smtp_test(){ # [$1 address] -> sends the test there; asks when no address is given
   local to result
-  [ "$(mbox smtp_ready)" = yes ] || { warn "fill in address, password and host first"; return; }
-  to="$(ask "Send the test to" "$(mbox smtp_get user)")"
+  [ "$(mbox smtp_ready)" = yes ] || { warn "fill in address, password and host first"; return 1; }
+  to="${1:-$(ask "Send the test to" "$(mbox smtp_get user)")}"
   [ -n "$to" ] || return
   step "Sending test"
-  result="$(MAIL_REC="{\"to\":[{\"name\":\"you\",\"email\":\"$to\"}]}" send_mail - "developer-tools" "0.0.0" "https://github.com/azharbinanwar/developer-tools" "- this is a test")"
+  # the real template, filled with the tool itself, so the mail shows what people will get
+  result="$(MAIL_REC="{\"to\":[{\"name\":\"${to%@*}\",\"email\":\"$to\"}]}" send_mail - "developer-tools" "${VERSION:-test}" "https://github.com/azharbinanwar/developer-tools" "- a test of the mailbox from developer-tools $(date '+%d %b %H:%M'); real mails use the site or APK template with the project's own details")"
   case "$result" in
     OK*) ok "delivered — check $to (and its spam folder)" ;;
-    FAIL*) warn "$(printf '%s' "$result" | cut -f2)" ;;
-    *) warn "no recipients" ;;
+    FAIL*) warn "$(printf '%s' "$result" | cut -f2)"; return 1 ;;
+    *) warn "no recipients"; return 1 ;;
   esac
 }
 
@@ -1765,6 +1769,8 @@ main(){
   while [ $# -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
+      -[a-zA-Z][a-zA-Z]*)  # bundled short flags: -ny is -n -y
+        for (( i=${#arg}-1; i>=1; i-- )); do set -- "-${arg:$i:1}" "$@"; done; continue ;;
       --prod|--production) PROD=yes ;;
       --preview)           PROD=no ;;
       --dry-run|-n)        DRY=yes ;;
@@ -1778,17 +1784,19 @@ main(){
       --no-mail)           WANT_MAIL=no ;;
       --yes|-y)            YES=yes ;;
       accounts)            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "accounts"; accounts_menu; exit 0 ;;
-      mailbox)             [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "mailbox"; { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
-      --version|-V|-v)     echo "ship-site $VERSION"; exit 0 ;;
+      mailbox)             if [ "${1:-}" = test ]; then banner "ship-site $VERSION" "mailbox"; smtp_test "${2:-$(mbox smtp_get user)}"; exit $?; fi
+                           [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "mailbox"; { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
+      --version|-V)        echo "ship-site $VERSION"; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-site${R} ${D}%s${R}\n\n" "$VERSION"
         printf "    ${A}ship-site${R}             your Vercel projects and Firebase sites; pick one, it builds and publishes\n"
         printf "    ${A}ship-site --prod${R}      straight to the main website, no question asked\n"
         printf "    ${A}ship-site --preview${R}   a test URL: a fresh preview on Vercel, the 7-day preview channel on Firebase\n"
         printf "    ${A}ship-site --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
+        printf "    ${A}ship-site -V${R}          the version; short flags combine: -ny is -n -y\n"
         printf "    ${A}ship-site ~/site${R}      treat that folder as the current project\n"
         printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts\n"
-        printf "    ${A}ship-site mailbox${R}     the account the link is mailed from, shared with ship-apk\n\n"
+        printf "    ${A}ship-site mailbox${R}     the account the link is mailed from, shared with ship-apk; ${A}mailbox test${R} sends a test to yourself\n\n"
         printf "  ${B}Without questions${R}  ${D}for scripts and the web page: every answer given up front${R}\n"
         printf "    ${A}--project <id>${R}        the project: a Vercel project id, or Firebase <project>/<site>\n"
         printf "    ${A}--version=keep|next|X${R} publish as is, bump the patch, or set a version\n"
