@@ -739,6 +739,8 @@ main(){
   while [ $# -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
+      -[a-zA-Z][a-zA-Z]*)  # bundled short flags: -ny is -n -y
+        for (( i=${#arg}-1; i>=1; i-- )); do set -- "-${arg:$i:1}" "$@"; done; continue ;;
       --prod|--production) PROD=yes ;;
       --preview)           PROD=no ;;
       --dry-run|-n)        DRY=yes ;;
@@ -752,17 +754,19 @@ main(){
       --no-mail)           WANT_MAIL=no ;;
       --yes|-y)            YES=yes ;;
       accounts)            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "accounts"; accounts_menu; exit 0 ;;
-      mailbox)             [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "mailbox"; { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
-      --version|-V|-v)     echo "ship-site $VERSION"; exit 0 ;;
+      mailbox)             if [ "${1:-}" = test ]; then banner "ship-site $VERSION" "mailbox"; smtp_test "${2:-$(mbox smtp_get user)}"; exit $?; fi
+                           [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "mailbox"; { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
+      --version|-V)        echo "ship-site $VERSION"; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-site${R} ${D}%s${R}\n\n" "$VERSION"
         printf "    ${A}ship-site${R}             your Vercel projects and Firebase sites; pick one, it builds and publishes\n"
         printf "    ${A}ship-site --prod${R}      straight to the main website, no question asked\n"
         printf "    ${A}ship-site --preview${R}   a test URL: a fresh preview on Vercel, the 7-day preview channel on Firebase\n"
         printf "    ${A}ship-site --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
+        printf "    ${A}ship-site -V${R}          the version; short flags combine: -ny is -n -y\n"
         printf "    ${A}ship-site ~/site${R}      treat that folder as the current project\n"
         printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts\n"
-        printf "    ${A}ship-site mailbox${R}     the account the link is mailed from, shared with ship-apk\n\n"
+        printf "    ${A}ship-site mailbox${R}     the account the link is mailed from, shared with ship-apk; ${A}mailbox test${R} sends a test to yourself\n\n"
         printf "  ${B}Without questions${R}  ${D}for scripts and the web page: every answer given up front${R}\n"
         printf "    ${A}--project <id>${R}        the project: a Vercel project id, or Firebase <project>/<site>\n"
         printf "    ${A}--version=keep|next|X${R} publish as is, bump the patch, or set a version\n"

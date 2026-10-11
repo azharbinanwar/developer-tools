@@ -541,12 +541,14 @@ edit_app(){ # $1 project key -> everything about one app in one place; returns 1
 WANT_APP=""; WANT_VERSION=""; WANT_BUILD=""   # --app <key> picks the app; --version, --fresh/--last-build, --mail, --notes answer the steps
 main(){
   DRY=no; VERBOSE=no
-  local arg ROOT="" HERE="" idx sel n napps
+  local arg ROOT="" HERE="" idx sel n napps i
   while [ $# -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
+      -[a-zA-Z][a-zA-Z]*)  # bundled short flags: -ny is -n -y
+        for (( i=${#arg}-1; i>=1; i-- )); do set -- "-${arg:$i:1}" "$@"; done; continue ;;
       --dry-run|-n) DRY=yes ;;
-      --verbose)    VERBOSE=yes ;;
+      --verbose|-v) VERBOSE=yes ;;
       --app)        WANT_APP="${1:-}"; shift ;;
       --version=*)  WANT_VERSION="${arg#*=}" ;;
       --fresh)      WANT_BUILD=fresh ;;
@@ -556,13 +558,15 @@ main(){
       --mail)       WANT_MAIL=yes ;;
       --no-mail)    WANT_MAIL=no ;;
       --yes|-y)     YES=yes ;;
-      --version|-V|-v) echo "ship-apk $VERSION"; exit 0 ;;
-      config|-c)    banner "ship-apk $VERSION" "mail account"; smtp_menu; exit 0 ;;
+      --version|-V) echo "ship-apk $VERSION"; exit 0 ;;
+      config|-c)    if [ "${1:-}" = test ]; then banner "ship-apk $VERSION" "mail account"; smtp_test "${2:-$(mbox smtp_get user)}"; exit $?; fi
+                    banner "ship-apk $VERSION" "mail account"; smtp_menu; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-apk${R} ${D}%s${R}\n\n" "$VERSION"
         printf "    ${A}ship-apk${R}             your apps; pick one, it builds, uploads and mails the link\n"
         printf "    ${A}ship-apk --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
-        printf "    ${A}ship-apk --verbose${R}   stream the full build log instead of one line\n"
+        printf "    ${A}ship-apk --verbose${R}   stream the full build log instead of one line (also -v)\n"
+        printf "    ${A}ship-apk -V${R}          the version; short flags combine: -nv is -n -v\n"
         printf "    ${A}ship-apk config${R}      mail account and template\n\n"
         printf "  ${B}Without questions${R}  ${D}for scripts and the web page: every answer given up front${R}\n"
         printf "    ${A}--app <key>${R}           the app, by the key the list and history show\n"

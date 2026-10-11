@@ -25,7 +25,8 @@ ship-apk              your apps; pick one, it builds, uploads and mails the link
 ship-apk --dry-run    check everything and show what would happen; changes nothing (also -n)
 ship-apk --verbose    stream the full build log instead of one line
 ship-apk config       mailbox and mail template
-ship-apk -v           version
+ship-apk --verbose    stream the full build log instead of one line (also -v)
+ship-apk -V           version · short flags combine: -nv is -n -v
 ```
 
 ## What happens

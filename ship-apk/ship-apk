@@ -358,12 +358,15 @@ sender_name = s.get("from_name") or s["user"]
 fields = dict(name=" and ".join([", ".join(names[:-1]), names[-1]]) if len(names) > 1 else names[0],
               app=app, version=version, link=link, sender=sender_name,
               notes=("\n\nWhat changed:\n" + notes) if notes.strip() else "")
+import re
+def render(t):   # only the known placeholders are filled; anything else, a typo or a stray brace, stays as typed
+    return re.sub(r"\{(\w+)\}", lambda mm: str(fields.get(mm.group(1), mm.group(0))), t or "")
 m = EmailMessage()
-m["Subject"] = (p.get("subject") or tpl["subject"]).format(**fields)
+m["Subject"] = render(p.get("subject") or tpl["subject"])
 m["From"] = formataddr((sender_name, s.get("user", "")))
 m["To"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in to)
 if cc: m["Cc"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in cc)
-m.set_content(tpl["body"].format(**fields))
+m.set_content(render(tpl["body"]))
 
 if dry:
     print("-" * 60)
@@ -423,17 +426,18 @@ log_send(){ # project · version · link · how many were mailed
   printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M')" "$2" "$4" "$3" >> "$LOGS/$1.log"
 }
 
-smtp_test(){
+smtp_test(){ # [$1 address] -> sends the test there; asks when no address is given
   local to result
-  [ "$(mbox smtp_ready)" = yes ] || { warn "fill in address, password and host first"; return; }
-  to="$(ask "Send the test to" "$(mbox smtp_get user)")"
+  [ "$(mbox smtp_ready)" = yes ] || { warn "fill in address, password and host first"; return 1; }
+  to="${1:-$(ask "Send the test to" "$(mbox smtp_get user)")}"
   [ -n "$to" ] || return
   step "Sending test"
-  result="$(MAIL_REC="{\"to\":[{\"name\":\"you\",\"email\":\"$to\"}]}" send_mail - "developer-tools" "0.0.0" "https://github.com/azharbinanwar/developer-tools" "- this is a test")"
+  # the real template, filled with the tool itself, so the mail shows what people will get
+  result="$(MAIL_REC="{\"to\":[{\"name\":\"${to%@*}\",\"email\":\"$to\"}]}" send_mail - "developer-tools" "${VERSION:-test}" "https://github.com/azharbinanwar/developer-tools" "- a test of the mailbox from developer-tools $(date '+%d %b %H:%M'); real mails use the site or APK template with the project's own details")"
   case "$result" in
     OK*) ok "delivered — check $to (and its spam folder)" ;;
-    FAIL*) warn "$(printf '%s' "$result" | cut -f2)" ;;
-    *) warn "no recipients" ;;
+    FAIL*) warn "$(printf '%s' "$result" | cut -f2)"; return 1 ;;
+    *) warn "no recipients"; return 1 ;;
   esac
 }
 
@@ -1193,12 +1197,14 @@ edit_app(){ # $1 project key -> everything about one app in one place; returns 1
 WANT_APP=""; WANT_VERSION=""; WANT_BUILD=""   # --app <key> picks the app; --version, --fresh/--last-build, --mail, --notes answer the steps
 main(){
   DRY=no; VERBOSE=no
-  local arg ROOT="" HERE="" idx sel n napps
+  local arg ROOT="" HERE="" idx sel n napps i
   while [ $# -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
+      -[a-zA-Z][a-zA-Z]*)  # bundled short flags: -ny is -n -y
+        for (( i=${#arg}-1; i>=1; i-- )); do set -- "-${arg:$i:1}" "$@"; done; continue ;;
       --dry-run|-n) DRY=yes ;;
-      --verbose)    VERBOSE=yes ;;
+      --verbose|-v) VERBOSE=yes ;;
       --app)        WANT_APP="${1:-}"; shift ;;
       --version=*)  WANT_VERSION="${arg#*=}" ;;
       --fresh)      WANT_BUILD=fresh ;;
@@ -1208,13 +1214,15 @@ main(){
       --mail)       WANT_MAIL=yes ;;
       --no-mail)    WANT_MAIL=no ;;
       --yes|-y)     YES=yes ;;
-      --version|-V|-v) echo "ship-apk $VERSION"; exit 0 ;;
-      config|-c)    banner "ship-apk $VERSION" "mail account"; smtp_menu; exit 0 ;;
+      --version|-V) echo "ship-apk $VERSION"; exit 0 ;;
+      config|-c)    if [ "${1:-}" = test ]; then banner "ship-apk $VERSION" "mail account"; smtp_test "${2:-$(mbox smtp_get user)}"; exit $?; fi
+                    banner "ship-apk $VERSION" "mail account"; smtp_menu; exit 0 ;;
       -h|--help)
         printf "\n  ${B}ship-apk${R} ${D}%s${R}\n\n" "$VERSION"
         printf "    ${A}ship-apk${R}             your apps; pick one, it builds, uploads and mails the link\n"
         printf "    ${A}ship-apk --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
-        printf "    ${A}ship-apk --verbose${R}   stream the full build log instead of one line\n"
+        printf "    ${A}ship-apk --verbose${R}   stream the full build log instead of one line (also -v)\n"
+        printf "    ${A}ship-apk -V${R}          the version; short flags combine: -nv is -n -v\n"
         printf "    ${A}ship-apk config${R}      mail account and template\n\n"
         printf "  ${B}Without questions${R}  ${D}for scripts and the web page: every answer given up front${R}\n"
         printf "    ${A}--app <key>${R}           the app, by the key the list and history show\n"

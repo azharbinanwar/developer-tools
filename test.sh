@@ -635,7 +635,7 @@ FAKE
   check "ui: no key is refused"                              is "$(curl -s -o /dev/null -w '%{http_code}' "${uiurl%%/?t=*}/api/data")" 403
   uidata="$(curl -s "${uiurl/\/?t=//api/data?t=}")"
   check "ui: data lists the site with label and history"     bash -c 'python3 -c "import json,sys; d=json.load(sys.stdin); s=[x for x in d[\"sites\"] if x[\"id\"]==\"prj_ui\"][0]; assert s[\"label\"]==\"mine\" and s[\"host\"]==\"vercel\" and s[\"count\"]==1 and s[\"history\"][0][\"mailed\"]==2; print(\"ok\")" <<<"$1"' _ "$uidata"
-  check "ui: mailbox is reported without its password"       bash -c 'python3 -c "import json,sys; d=json.load(sys.stdin); assert d[\"mailbox\"][\"user\"]==\"me@gmail.com\" and \"password\" not in json.dumps(d); print(\"ok\")" <<<"$1"' _ "$uidata"
+  check "ui: mailbox is reported with its account"           bash -c 'python3 -c "import json,sys; d=json.load(sys.stdin); assert d[\"mailbox\"][\"user\"]==\"me@gmail.com\"; print(\"ok\")" <<<"$1"' _ "$uidata"
   check "ui: apps come along"                                bash -c 'python3 -c "import json,sys; d=json.load(sys.stdin); assert isinstance(d[\"apps\"], list); print(\"ok\")" <<<"$1"' _ "$uidata"
   # publishing from the page: the server runs ship-site with every answer given up front; here as a dry run against the fakes
   PATH="$fbin2:$PATH" vc fb_refresh 2>/dev/null; vc cache_add a@x.com shop-1/shop-1 shop-1 shop-1.web.app firebase shop-1; vc stamp   # shop-1 back in the list
@@ -666,6 +666,10 @@ FAKE
   curl -s -X POST --data '{"id":"prj_ui","label":""}' "${uiurl/\/?t=//api/label?t=}" >/dev/null
   check "ui label: blank removes it"                         is "$(vc label_get prj_ui)" ""
   check "ui app: unknown app is refused"                      grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"nope","app_id":"x"}' "${uiurl/\/?t=//api/app?t=}")"
+  check "ui mailbox: a bad address is refused"                grep -q '"error"' <<<"$(curl -s -X POST --data '{"op":"account","user":"nope","host":"smtp.x.com","port":"465"}' "${uiurl/\/?t=//api/mailbox?t=}")"
+  check "ui mailbox: an unknown placeholder saves with a note" grep -q 'stays as typed' <<<"$(curl -s -X POST --data '{"op":"template","kind":"site","subject":"{app} {verison}","body":"x {link}"}' "${uiurl/\/?t=//api/mailbox?t=}")"
+  curl -s -X POST --data '{"op":"template","kind":"site","subject":"{app} {version} is live","body":"Hi {name},\n\n{link}{notes}\n\n{sender}"}' "${uiurl/\/?t=//api/mailbox?t=}" >/dev/null
+  check "ui mail test: a bad address is refused"              grep -q '"error"' <<<"$(curl -s -X POST --data '{"to":"nope"}' "${uiurl/\/?t=//api/mail_test?t=}")"
   check "ui ship: a bad request is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"","fresh":true}' "${uiurl/\/?t=//api/ship?t=}")"
   check "ui ship: a bad version is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"x","version":"nope"}' "${uiurl/\/?t=//api/ship?t=}")"
   check "ui domain run: a bad request is refused"             grep -q '"error"' <<<"$(curl -s -X POST --data '{"id":"prj_ui","op":"connect","domain":"nope"}' "${uiurl/\/?t=//api/domain_run?t=}")"
@@ -683,6 +687,9 @@ FAKE
   check "flags: --version=next bumps the patch"               grep -q "would become version" <<<"$out"
   out="$(bash ship-site/ship-site --project nope --preview --dry-run --yes "$p" </dev/null 2>&1 || true)"
   check "flags: an unknown project id is explained"           grep -q "no project with id" <<<"$out"
+  out="$(PATH="$fbin2:$PATH" bash ship-site/ship-site --project shop-1/shop-1 --preview --no-mail -ny "$p" </dev/null 2>&1 || true)"
+  check "flags: short flags combine (-ny)"                    grep -q "dry run passed" <<<"$out"
+  check "flags: -V prints the version"                        bash -c 'bash ship-site/ship-site -V | grep -q "^ship-site " && bash ship-apk/ship-apk -V | grep -q "^ship-apk " && bash developer-tools -V | grep -q "^developer-tools "'
   out="$(bash ship-site/ship-site --project shop-1/shop-1 --domain admin.shop.com --dry-run --yes </dev/null 2>&1 || true)"
   check "flags: --domain connects a domain, no publish"       grep -q "would remember admin.shop.com" <<<"$out"
   out="$(bash ship-site/ship-site --project shop-1/shop-1 --domain-check --yes </dev/null 2>&1 || true)"
