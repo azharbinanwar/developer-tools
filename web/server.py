@@ -284,9 +284,20 @@ def set_channel(body):
     if c not in ("stable", "beta"): return {"error": "stable or beta?"}
     r = subprocess.run([SELF, c], capture_output=True, text=True, env=dict(os.environ, TERM="dumb"))
     return {"ok": True} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[-200:]}
-def start_update():
-    """developer-tools install: every tool and the hub itself onto the channel's newest release, streamed like any run"""
-    return run([SELF, "install"], kind="update", id="updates")
+def releases():
+    """GitHub's releases, newest first, through the hub (one network call)"""
+    try: out = subprocess.run([SELF, "releases"], capture_output=True, text=True, timeout=20, env=dict(os.environ, TERM="dumb")).stdout
+    except Exception as e: return {"error": "could not ask the hub: %s" % e}
+    rows = []
+    for l in out.splitlines():
+        p = l.split("\t", 3)
+        if len(p) == 4: rows.append(dict(tag=p[0], version=p[0].lstrip("v"), beta=p[1] == "beta", date=p[2], notes=p[3].replace("\\n", "\n")))
+    return {"releases": rows}
+def start_update(body):
+    """developer-tools install [version]: every tool and the hub itself, streamed like any run"""
+    v = str(body.get("version", "")).strip().lstrip("v")
+    if v and not re.match(r"^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$", v): return {"error": "a version like 2.1.0 or 2.2.0-beta.1"}
+    return run([SELF, "install"] + ([v] if v else []), kind="update", id="updates", version=v)
 def label_edit(body):
     pid, label = str(body.get("id", "")), str(body.get("label", "")).strip()[:40]
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
@@ -501,7 +512,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/accounts": return self.send(200, json.dumps(start_account(body)).encode(), "application/json")
         if u.path == "/api/channel": return self.send(200, json.dumps(set_channel(body)).encode(), "application/json")
         if u.path == "/api/updates": return self.send(200, json.dumps(updates()).encode(), "application/json")
-        if u.path == "/api/update": return self.send(200, json.dumps(start_update()).encode(), "application/json")
+        if u.path == "/api/update": return self.send(200, json.dumps(start_update(body)).encode(), "application/json")
+        if u.path == "/api/releases": return self.send(200, json.dumps(releases()).encode(), "application/json")
         if u.path == "/api/account_label": return self.send(200, json.dumps(account_label(body)).encode(), "application/json")
         self.send(404, b"not found", "text/plain")
 

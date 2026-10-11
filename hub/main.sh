@@ -26,6 +26,11 @@ latest_tag(){ # -> the newest release tag on the current channel: the stable "la
   if [ "$(channel)" = beta ]; then newest_tag
   else curl -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n 's|.*/tag/||p'; fi
 }
+releases(){ # -> the last 20 releases, newest first: tag<TAB>beta|stable<TAB>date<TAB>notes (newlines as \\n); empty offline
+  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=20" 2>/dev/null | py -c 'import json,sys
+for r in json.load(sys.stdin):
+    print("\t".join([r["tag_name"], "beta" if r.get("prerelease") else "stable", (r.get("published_at") or "")[:10], (r.get("body") or "").replace("\r","").replace("\n","\\n")]))' 2>/dev/null || true
+}
 versions(){ # -> one line per tool: name<TAB>installed version (or -), then channel and latest; what the web page's Updates view shows
   local t v
   for t in "${TOOLS[@]}" developer-tools; do
@@ -160,7 +165,8 @@ main(){
       printf "    ${A}developer-tools <tool>${R}       run one tool (ship-apk, ship-site)\n"
       printf "    ${A}developer-tools ui${R}           a local web page over both tools: publish a site, its domain, history, mail, folders\n"
       printf "    ${A}developer-tools mailbox${R}      the account the links are mailed from; ${A}mailbox test <address>${R} sends a test there\n"
-      printf "    ${A}developer-tools versions${R}     what is installed, the channel, and the newest release on it\n\n"
+      printf "    ${A}developer-tools versions${R}     what is installed, the channel, and the newest release on it\n"
+      printf "    ${A}developer-tools releases${R}     the releases on GitHub, newest first; ${A}install <version>${R} puts that one in place\n\n"
       printf "  ${D}Tools install to %s and keep their settings in ~/.config/<tool>/${R}\n\n" "$BIN"
       exit 0 ;;
     ui)      banner "developer-tools $VERSION" "web page"; ui_serve "${2:-}"; exit 0 ;;
@@ -169,8 +175,11 @@ main(){
              [ -t 0 ] || die "needs a terminal; or: developer-tools mailbox test <address>"
              { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
     versions) versions; exit 0 ;;
-    install) banner "developer-tools $VERSION" "installing everything  · $(channel) channel"
-             resolve_base; install_picked $(seq 0 $(( ${#TOOLS[@]} - 1 ))); printf "\n" >&2; exit 0 ;;
+    releases) releases; exit 0 ;;
+    install) if [ -n "${2:-}" ]; then   # install <version>: that release, whatever the channel
+               banner "developer-tools $VERSION" "installing ${2#v}"; BASE="https://github.com/$REPO/releases/download/v${2#v}"
+             else banner "developer-tools $VERSION" "installing everything  · $(channel) channel"; resolve_base; fi
+             install_picked $(seq 0 $(( ${#TOOLS[@]} - 1 ))); printf "\n" >&2; exit 0 ;;
     beta|stable) set_channel "$1"
              if [ "${2:-}" = install ]; then banner "developer-tools $VERSION" "installing everything · $1 channel"; resolve_base; install_picked $(seq 0 $(( ${#TOOLS[@]} - 1 ))); printf "\n" >&2
              else ok "channel set to $1 — run developer-tools install to update"; fi
