@@ -13,6 +13,13 @@ ui_serve(){ # [--no-open] -> runs until q or Ctrl-C
   [ -n "$tok" ] || tok="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   out="$(tmpf devtools-ui)"
   step "Web page"
+  # already running from another terminal? then that is the page: hand over its link
+  local was; was="$(py -c 'import json,sys,urllib.request
+try:
+    d=json.load(open(sys.argv[1])); u="http://127.0.0.1:%s/?t=%s"%(d["port"],d["token"])
+    urllib.request.urlopen(u.replace("/?t=","/api/data?t="),timeout=1).read(1); print(u)
+except Exception: pass' "$HOME/.config/developer-tools/ui.json" 2>/dev/null || true)"
+  if [ -n "$was" ]; then row "page" "${B}${A}${was}${R}"; sub "already running from another terminal; this is its link"; [ "$open" = yes ] && { open_it "$was" || true; }; return 0; fi
   # the ship-site that publishes from the page: the one next to this hub (the repo), else the installed one
   local here site_bin=""; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
   local apk_bin=""
@@ -23,7 +30,7 @@ ui_serve(){ # [--no-open] -> runs until q or Ctrl-C
 PY
   pid=$!; disown "$pid" 2>/dev/null || true   # ours to stop later; bash must not report it when we do
   # the server prints one line, where it listens; wait for it, then hand the link over
-  for _ in $(seq 1 25); do [ -s "$out" ] && break; sleep 0.2; done
+  for _ in $(seq 1 40); do [ -s "$out" ] && break; sleep 0.2; done
   url="$(sed -n 's/^URL	//p' "$out" 2>/dev/null)"
   [ -n "$url" ] || { kill "$pid" 2>/dev/null; die "the local server did not start (python3 http.server) — see $out"; }
   row "page" "${B}${A}${url}${R}"

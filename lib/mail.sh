@@ -10,9 +10,9 @@ py - "$MAILBOX" "$@" <<'PY'
 import json, os, sys
 path, op = sys.argv[1], sys.argv[2]
 a = sys.argv[3:]
-try: d = json.load(open(path))
-except Exception:
-    d = {}
+exec(os.environ.get("DT_LOAD", "def load_json(p):\n    import json\n    try: return json.load(open(p))\n    except Exception: return {}"))
+d = load_json(path)
+if not d:
     # a mailbox set up by ship-apk 2.0 moves over as it is, nothing to type again
     old = os.path.join(os.path.dirname(os.path.dirname(path)), "ship-apk", "config.json")
     try:

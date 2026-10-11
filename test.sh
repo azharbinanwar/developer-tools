@@ -670,6 +670,7 @@ FAKE
   check "ui mailbox: an unknown placeholder saves with a note" grep -q 'stays as typed' <<<"$(curl -s -X POST --data '{"op":"template","kind":"site","subject":"{app} {verison}","body":"x {link}"}' "${uiurl/\/?t=//api/mailbox?t=}")"
   curl -s -X POST --data '{"op":"template","kind":"site","subject":"{app} {version} is live","body":"Hi {name},\n\n{link}{notes}\n\n{sender}"}' "${uiurl/\/?t=//api/mailbox?t=}" >/dev/null
   check "ui mail test: a bad address is refused"              grep -q '"error"' <<<"$(curl -s -X POST --data '{"to":"nope"}' "${uiurl/\/?t=//api/mail_test?t=}")"
+  check "ui accounts: a bad request is refused"               grep -q '"error"' <<<"$(curl -s -X POST --data '{"op":"nope","host":"vercel"}' "${uiurl/\/?t=//api/accounts?t=}")"
   check "ui ship: a bad request is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"","fresh":true}' "${uiurl/\/?t=//api/ship?t=}")"
   check "ui ship: a bad version is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"x","version":"nope"}' "${uiurl/\/?t=//api/ship?t=}")"
   check "ui domain run: a bad request is refused"             grep -q '"error"' <<<"$(curl -s -X POST --data '{"id":"prj_ui","op":"connect","domain":"nope"}' "${uiurl/\/?t=//api/domain_run?t=}")"
@@ -677,7 +678,7 @@ FAKE
   vc proj_set "$p" id shop-1/shop-1; vc proj_set "$p" account ui_me; vc proj_set "$p" name shop-1; vc proj_set "$p" host firebase
   check "ui link: unknown project is refused"                 grep -q '"error"' <<<"$(curl -s -X POST --data '{"id":"nope","op":"unlink"}' "${uiurl/\/?t=//api/link?t=}")"
   check "ui publish: no key, no run"                          is "$(curl -s -o /dev/null -w '%{http_code}' -X POST --data '{}' "${uiurl%%/?t=*}/api/deploy")" 403
-  pkill -f "python3 - $HOME/.config" 2>/dev/null || true
+  uiport="${uiurl#http://127.0.0.1:}"; uiport="${uiport%%/*}"; [ -n "$uiport" ] && lsof -nP -iTCP:"$uiport" -sTCP:LISTEN -t 2>/dev/null | xargs kill 2>/dev/null || true
   vc acct_del ui_me
   # the same without the page: every answer on the command line, no terminal
   out="$(PATH="$fbin2:$PATH" bash ship-site/ship-site --project shop-1/shop-1 --preview --dry-run --no-mail --yes "$p" </dev/null 2>&1 || true)"
@@ -689,6 +690,13 @@ FAKE
   check "flags: an unknown project id is explained"           grep -q "no project with id" <<<"$out"
   out="$(PATH="$fbin2:$PATH" bash ship-site/ship-site --project shop-1/shop-1 --preview --no-mail -ny "$p" </dev/null 2>&1 || true)"
   check "flags: short flags combine (-ny)"                    grep -q "dry run passed" <<<"$out"
+  out="$(bash ship-site/ship-site accounts add vercel --nope </dev/null 2>&1 || true)"
+  check "accounts flags: an unknown flag is explained"        grep -q "accounts add vercel \[name\]" <<<"$out"
+  out="$(bash ship-site/ship-site accounts remove vercel nobody </dev/null 2>&1 || true)"
+  check "accounts flags: removing an unknown account is explained" grep -q "no Vercel account" <<<"$out"
+  vc acct_set ren_a org_id o1; vc acct_set ren_a scope me
+  check "accounts: rename sets a label, the id stays"        bash -c 'source ./ship-site/ship-site; bash ship-site/ship-site accounts rename vercel ren_a "My team" </dev/null >/dev/null 2>&1 && [ "$(vc acct_label vercel ren_a)" = "My team" ] && [ "$(vc acct_get ren_a scope)" = me ]'
+  vc acct_del ren_a; vc acct_label vercel ren_a ""
   check "flags: -V prints the version"                        bash -c 'bash ship-site/ship-site -V | grep -q "^ship-site " && bash ship-apk/ship-apk -V | grep -q "^ship-apk " && bash developer-tools -V | grep -q "^developer-tools "'
   out="$(bash ship-site/ship-site --project shop-1/shop-1 --domain admin.shop.com --dry-run --yes </dev/null 2>&1 || true)"
   check "flags: --domain connects a domain, no publish"       grep -q "would remember admin.shop.com" <<<"$out"

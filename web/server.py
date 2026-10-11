@@ -248,6 +248,30 @@ def start_mail_test(body):
     to = str(body.get("to", "")).strip()
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", to): return {"error": "that is not an email address"}
     return run([SELF, "mailbox", "test", to], kind="mailtest", id="mailbox")
+def account_label(body):
+    """the label an account shows under; the id stays what the tools use"""
+    host, aid, label = body.get("host"), str(body.get("id", "")).strip(), str(body.get("label", "")).strip()[:40]
+    if host not in ("vercel", "firebase") or not aid: return {"error": "which account?"}
+    d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
+    labels = d.setdefault("acct_labels", {})
+    if label: labels[host + "|" + aid] = label
+    else: labels.pop(host + "|" + aid, None)
+    json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
+    return {"ok": True}
+def start_account(body):
+    """add or remove a Vercel or Firebase account through ship-site, streamed like any run"""
+    if not SHIP_SITE: return {"error": "ship-site is not installed on this computer"}
+    op, host, name = body.get("op"), body.get("host"), str(body.get("name", "")).strip()
+    if op not in ("add", "remove") or host not in ("vercel", "firebase"): return {"error": "add or remove, vercel or firebase?"}
+    if op == "remove" and not name: return {"error": "which account?"}
+    args, env = [SHIP_SITE, "accounts", op, host], {}
+    if op == "add" and host == "vercel":
+        token = str(body.get("token", "")).strip()
+        if token: args.append("--token"); env["VERCEL_TOKEN"] = token
+        team = str(body.get("team", "")).strip()
+        if team: args += ["--team", team]
+    if op == "remove": args.append(name)
+    return run(args, env=env, kind="accounts", id=host)
 def label_edit(body):
     pid, label = str(body.get("id", "")), str(body.get("label", "")).strip()[:40]
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
@@ -301,7 +325,7 @@ def domain_edit(body):
     json.dump(d, open(path, "w"), indent=2); os.chmod(path, 0o600)
     return res
 RUNDIR = os.path.join(CONF, "developer-tools", "runs")
-def run(args, **meta):
+def run(args, env=None, **meta):
     """start a tool detached from this server, its output in RUNDIR/<id>.log and its exit code in <id>.code when it ends;
     the run is listed in /api/data until then, so a reloaded page (or a restarted server) picks it up"""
     os.makedirs(RUNDIR, exist_ok=True)
@@ -312,7 +336,7 @@ def run(args, **meta):
     base = os.path.join(RUNDIR, rid)
     log = open(base + ".log", "w")
     proc = subprocess.Popen(["bash", "-c", '"$@"; echo $? > "$CODE"', "run"] + args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                            env=dict(os.environ, TERM="dumb", CODE=base + ".code"), start_new_session=True)
+                            env=dict(os.environ, TERM="dumb", CODE=base + ".code", **(env or {})), start_new_session=True)
     import shlex
     meta = dict(meta, run=rid, started=time.time(), pid=proc.pid, command=" ".join(shlex.quote(a) for a in args))
     json.dump(meta, open(base + ".json", "w"))
@@ -375,9 +399,14 @@ def status(rid):
     except Exception: out = ""
     done, code = run_state(m)
     return {"out": out, "done": done, "code": code}
+BROKEN = []
 def load(*p):
-    try: return json.load(open(os.path.join(CONF, *p)))
-    except Exception: return {}
+    f = os.path.join(CONF, *p)
+    if not os.path.exists(f): return {}
+    try: return json.load(open(f))
+    except Exception:
+        if f not in BROKEN: BROKEN.append(f)
+        return {}
 def ago(t):
     if not t: return ""
     d = (int(time.time()) - int(t)) // 86400
@@ -386,6 +415,7 @@ def when(t): return time.strftime("%d %b %Y %H:%M", time.localtime(t))
 def hist(rows): return [dict(r, when=when(r["t"])) for r in reversed(rows or [])]
 
 def data():
+    del BROKEN[:]
     s, a, m = load("ship-site", "config.json"), load("ship-apk", "config.json"), load("developer-tools", "mail.json")
     folders = {}
     for f, pr in s.get("projects", {}).items(): folders.setdefault(pr.get("id"), f)
@@ -413,11 +443,12 @@ def data():
                ready=bool(smtp.get("host") and smtp.get("user") and smtp.get("password")))
     try: channel = open(os.path.join(CONF, "developer-tools", "channel")).read().strip() or "stable"
     except Exception: channel = "stable"
-    accounts = [dict(name=n, scope=a.get("scope", ""), team=a.get("team_id", ""), host="Vercel") for n, a in sorted(s.get("accounts", {}).items())]
-    accounts += [dict(name=e, scope="", team="", host="Firebase") for e in s.get("fb_accounts", [])]
+    al = s.get("acct_labels", {})
+    accounts = [dict(name=n, label=al.get("vercel|" + n, ""), user=a.get("user", ""), scope=a.get("scope", ""), team=a.get("team_id", ""), host="Vercel") for n, a in sorted(s.get("accounts", {}).items())]
+    accounts += [dict(name=e, label=al.get("firebase|" + e, ""), scope="", team="", host="Firebase") for e in s.get("fb_accounts", [])]
     tpl = dict(site=m.get("template_site", {}), apk=m.get("template_apk", {}))
     return dict(sites=sites, apps=apps, mailbox=box, templates=tpl, accounts=accounts, vercel_accounts=sorted(s.get("accounts", {})), firebase_accounts=s.get("fb_accounts", []),
-                can_publish=bool(SHIP_SITE), can_ship=bool(SHIP_APK), active=active_runs(), hub_version=HUB_VERSION, port=PORT, channel=channel, page=page_hash(),
+                can_publish=bool(SHIP_SITE), can_ship=bool(SHIP_APK), active=active_runs(), broken=[b.replace(os.path.expanduser("~"), "~") for b in BROKEN], hub_version=HUB_VERSION, port=PORT, channel=channel, page=page_hash(),
                 tools=[dict(name="ship-site", what="Build a web app and publish it to Vercel or Firebase", version=tool_version(SHIP_SITE)),
                        dict(name="ship-apk", what="Build a Flutter APK, upload it to appho.st, mail the link", version=tool_version(SHIP_APK)),
                        dict(name="developer-tools", what="The hub, and this page", version=HUB_VERSION)])
@@ -453,13 +484,24 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/open_log": return self.send(200, json.dumps(open_log(body)).encode(), "application/json")
         if u.path == "/api/mailbox": return self.send(200, json.dumps(mailbox_edit(body)).encode(), "application/json")
         if u.path == "/api/mail_test": return self.send(200, json.dumps(start_mail_test(body)).encode(), "application/json")
+        if u.path == "/api/accounts": return self.send(200, json.dumps(start_account(body)).encode(), "application/json")
+        if u.path == "/api/account_label": return self.send(200, json.dumps(account_label(body)).encode(), "application/json")
         self.send(404, b"not found", "text/plain")
 
 UI = os.path.join(CONF, "developer-tools", "ui.json")
 try: want = int(json.load(open(UI)).get("port", 0))
 except Exception: want = 0
-try: srv = ThreadingHTTPServer(("127.0.0.1", want), H)
-except OSError: srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+import threading
+def watch_parent():   # the hub's shell started us; when it is gone (we got reparented), so are we
+    while True:
+        time.sleep(2)
+        if os.getppid() == 1: os._exit(0)
+threading.Thread(target=watch_parent, daemon=True).start()
+srv = None
+for _ in range(8):    # the previous server may still be letting go of the port; wait a moment for it rather than move
+    try: srv = ThreadingHTTPServer(("127.0.0.1", want), H); break
+    except OSError: time.sleep(0.25)
+if srv is None: srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 PORT = srv.server_address[1]
 try:
     os.makedirs(os.path.dirname(UI), exist_ok=True); json.dump({"port": PORT, "token": TOKEN}, open(UI, "w")); os.chmod(UI, 0o600)

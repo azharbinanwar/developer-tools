@@ -14,34 +14,44 @@ acct_cli(){ # $1 name -> fills AUTH with the vercel cli flags, as an array so a 
   [ -f "$dir/token" ] && AUTH=(--token "$(cat "$dir/token")") || AUTH=(--global-config "$dir")
 }
 
-add_account(){ # -> echoes the new account name
-  local name dir token user teams idx r
+add_account(){ # [$1 label] [$2 browser|token] [$3 team slug] -> echoes the new account's id; with $2 nothing is asked (VERCEL_TOKEN carries a pasted token)
+  # the account is keyed by a random id, which is also its folder; renaming only changes the label, so nothing filed under the id moves
+  local label="${1:-}" how="${2:-}" want_team="${3:-}" name dir token user teams idx r
   step "Add a Vercel account"
-  name="$(ask "A name for it (your name, or the team)" "")"; [ -n "$name" ] || return 1
-  case "$name" in */*|.*) warn "no slashes or leading dots"; return 1 ;; esac
-  [ -z "$(vc acct_get "$name" org_id)" ] || { warn "“${name}” exists already — pick it from the list"; return 1; }
+  [ -n "$label" ] || [ -n "$how" ] || label="$(ask "A name for it (your name, or the team; blank for the Vercel username)" "")"
+  name="v$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
   dir="$ACCTS/$name"; mkdir -p "$dir"; chmod 700 "$ACCTS" "$dir"
-  MENU_ITEMS=("sign in with Vercel in the browser" "paste a token" "← back")
-  MENU_NOTES=("  ${D}opens vercel.com, nothing to copy${R}" "  ${D}from vercel.com/account/tokens${R}" "")
-  idx="$(menu_pick "How" 0)"
-  [ "$idx" = 2 ] && { rm -rf "$dir"; return 1; }
+  if [ -n "$how" ]; then idx=0; [ "$how" = token ] && idx=1
+  else
+    MENU_ITEMS=("sign in with Vercel in the browser" "paste a token" "← back")
+    MENU_NOTES=("  ${D}opens vercel.com, nothing to copy${R}" "  ${D}from vercel.com/account/tokens${R}" "")
+    idx="$(menu_pick "How" 0)"
+    [ "$idx" = 2 ] && { rm -rf "$dir"; return 1; }
+  fi
   if [ "$idx" = 0 ]; then
     cmd "vercel login --global-config $dir"
     vercel login --global-config "$dir" >&2 || { rm -rf "$dir"; warn "sign-in did not finish"; return 1; }
     rm -f "$dir/token"
   else
-    sub "create one at https://vercel.com/account/tokens, then paste it here (hidden)"
-    token="$(ask_secret "Token")"; [ -n "$token" ] || { rm -rf "$dir"; return 1; }
+    if [ -n "${VERCEL_TOKEN:-}" ]; then token="$VERCEL_TOKEN"
+    else sub "create one at https://vercel.com/account/tokens, then paste it here (hidden)"; token="$(ask_secret "Token")"; fi
+    [ -n "$token" ] || { rm -rf "$dir"; return 1; }
     printf '%s\n' "$token" > "$dir/token"; chmod 600 "$dir/token"
   fi
   token="$(acct_token "$name")"; [ -n "$token" ] || { rm -rf "$dir"; warn "no token came back"; return 1; }
   user="$(vc user "$token")" || { rm -rf "$dir"; warn "${user#ERR	}"; return 1; }
   ok "signed in as ${user#*	}"
+  vc acct_set "$name" user "${user#*	}"; vc acct_label vercel "$name" "${label:-${user#*	}}"
 
   # scope: personal, or one of the teams the account belongs to
   teams="$(vc teams "$token")" || die "${teams#ERR	}"
   vc acct_set "$name" scope "${user#*	}"; vc acct_set "$name" org_id "${user%%	*}"; vc acct_set "$name" team_id ""
-  if [ -n "$teams" ]; then
+  if [ -n "$teams" ] && [ -n "$how" ]; then   # answered up front: the team by slug, else personal
+    r="$(awk -F'\t' -v t="$want_team" '$2 == t' <<<"$teams" | head -1)"
+    [ -n "$want_team" ] && [ -z "$r" ] && warn "no team “${want_team}” on this account; using the personal scope"
+    [ -n "$r" ] && { vc acct_set "$name" team_id "$(cut -f1 <<<"$r")"; vc acct_set "$name" org_id "$(cut -f1 <<<"$r")"; vc acct_set "$name" scope "$(cut -f2 <<<"$r")"; }
+    [ -z "$want_team" ] && sub "teams on this account: $(cut -f2 <<<"$teams" | tr '\n' ' ')· add again with --team <slug> to deploy to one"
+  elif [ -n "$teams" ]; then
     MENU_ITEMS=("personal  ${user#*	}"); MENU_NOTES=("")
     while IFS=$'\t' read -r id slug tname; do MENU_ITEMS+=("team      $tname"); MENU_NOTES+=("  ${D}$slug${R}"); done <<<"$teams"
     step "Which scope does “${name}” deploy to"
@@ -51,15 +61,30 @@ add_account(){ # -> echoes the new account name
       vc acct_set "$name" team_id "$(cut -f1 <<<"$r")"; vc acct_set "$name" org_id "$(cut -f1 <<<"$r")"; vc acct_set "$name" scope "$(cut -f2 <<<"$r")"
     fi
   fi
-  ok "saved “${name}”  ${D}→ $(vc acct_get "$name" scope)${R}"
+  ok "saved “$(acct_show "$name")”  ${D}→ $(vc acct_get "$name" scope)${R}"
   printf '%s' "$name"
+}
+migrate_accounts(){ # accounts saved under a typed name move to a random id, like new ones: the name becomes the label, the sign-in folder follows, nothing else changes
+  local n tok u id
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    case "$n" in v[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+      *) id="v$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+         [ "$(vc acct_rekey "$n" "$id")" = ok ] || continue
+         [ -d "$ACCTS/$n" ] && mv "$ACCTS/$n" "$ACCTS/$id"; n="$id" ;;
+    esac
+    if [ -z "$(vc acct_get "$n" user)" ]; then tok="$(acct_token "$n" 2>/dev/null)"; [ -n "$tok" ] && u="$(vc user "$tok" 2>/dev/null)" && [ "${u#ERR}" = "$u" ] && vc acct_set "$n" user "${u#*	}"; fi
+  done < <(vc accounts)
+}
+acct_show(){ # $1 id -> the label of a Vercel account, else its username, else the id
+  local l; l="$(vc acct_label vercel "$1")"; [ -n "$l" ] || l="$(vc acct_get "$1" user)"; printf '%s' "${l:-$1}"
 }
 
 pick_account(){ # -> echoes an account name
   local names=() n idx
   while :; do
     names=(); MENU_ITEMS=(); MENU_NOTES=()
-    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); MENU_ITEMS+=("$(printf '%-16s' "$n")"); MENU_NOTES+=("  ${D}$(vc acct_get "$n" scope)${R}"); }; done < <(vc accounts)
+    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); MENU_ITEMS+=("$(printf '%-16s' "$(acct_show "$n")")"); MENU_NOTES+=("  ${D}$(vc acct_get "$n" scope)${R}"); }; done < <(vc accounts)
     MENU_ITEMS+=("+ add a Vercel account" "← back"); MENU_NOTES+=("  ${D}browser sign-in or a token${R}" "")
     step "Vercel account"
     idx="$(menu_pick "Which account" 0)"
