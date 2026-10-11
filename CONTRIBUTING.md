@@ -20,6 +20,11 @@ lib/keys.sh                 the shortcut-key engine and keys.json overrides
 lib/mail.sh                 mailbox setup, recipients, template, SMTP send
 lib/firebase.sh             Firebase Hosting: CLI logins, sites, deploys, custom domains
 lib/vercel.sh               Vercel: accounts, projects, deploys
+lib/web.sh                  developer-tools ui: starts the page server and stops it on q
+web/server.py               the page server (Python stdlib): /api/data, deploy, people, domain, label
+web/index.html              the page; web/style.css its tokens and component styles
+web/components/*.js         the generic components: Icon, AppButton, AppTile/AppTileGroup, AppGrid, AppTextField, AppChip, AppSwitch, AppNotice, StateView, PulseDot, toast, Terminal + followRun
+web/app.js                  the views, built from those components on the tools' own data
 ship-apk/main.sh            the ship-apk flow; its first line names the lib parts it needs
 ship-site/main.sh           the ship-site flow
 hub/main.sh                 the hub: menu to run, install, update or remove tools

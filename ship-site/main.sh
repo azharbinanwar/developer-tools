@@ -16,7 +16,7 @@
 #
 # License: MIT.
 
-VERSION="2.1.0"
+VERSION="2.2.0-beta.1"
 CONF="$HOME/.config/ship-site"
 LOGS="$CONF/logs"
 MAIL_KIND=site; MAIL_VERB="publishes"; MAIL_THING="project"   # how lib/mail.sh talks about this tool
@@ -86,7 +86,7 @@ def fb_get(token, ep):  # one Hosting API read; {} on any trouble
 def dom_state(cd):  # a customDomain -> dns (records not seen yet), cert (answers on http, HTTPS on its way), live
     if cd.get("hostState") != "HOST_ACTIVE": return "dns"
     c = cd.get("cert") or {}
-    return "live" if c.get("state") == "CERT_ACTIVE" and c.get("type") != "TEMPORARY" else "cert"
+    return "live" if c.get("state") == "CERT_ACTIVE" else "cert"
 
 def fb_domain_of(token, pid, site):  # the site's connected custom domain and its state, "" when none; the shortest when several
     ds = fb_get(token, "projects/%s/sites/%s/customDomains" % (pid, site)).get("customDomains", [])
@@ -176,9 +176,18 @@ elif op == "landing":   # cached projects: account id name url folder host label
             print("\x1f".join([c["account"], c["id"], c["name"], c["url"], folders.get(c["id"], ""), h, labels.get(c["id"], ""),
                                c.get("project", ""), str(st.get("count", "") or ""), ago(st.get("last")), doms.get(c["id"], ""),
                                d.get("domain_state", {}).get(c["id"], "")]))
-elif op == "stat_add":  # id -> one more publish, now
+elif op == "hist_add":  # id version main|test link account mailed -> one record per publish, newest last; the row count and date follow
     import time
-    st = d.setdefault("stats", {}).setdefault(a[0], {}); st["count"] = st.get("count", 0) + 1; st["last"] = int(time.time()); save()
+    now = int(time.time())
+    h = d.setdefault("history", {}).setdefault(a[0], [])
+    h.append({"t": now, "version": a[1], "target": a[2], "link": a[3], "account": a[4], "mailed": int(a[5] or 0)})
+    del h[:-100]
+    st = d.setdefault("stats", {}).setdefault(a[0], {}); st["count"] = st.get("count", 0) + 1; st["last"] = now; save()
+elif op == "history":   # id -> date<TAB>time<TAB>version<TAB>target<TAB>link<TAB>mailed, newest first
+    import time
+    for r in reversed(d.get("history", {}).get(a[0], [])):
+        print("%s\t%s\t%s\t%s\t%s\t%s" % (time.strftime("%d %b %Y", time.localtime(r["t"])), time.strftime("%H:%M", time.localtime(r["t"])),
+                                        r.get("version", ""), r.get("target", ""), r.get("link", ""), r.get("mailed", 0)))
 elif op == "stat_get":  st = d.get("stats", {}).get(a[0], {}); print("%s\t%s" % (st.get("count", 0), ago(st.get("last"))))
 elif op == "fb_token":  print(cli_token(a[0]))
 elif op == "url_get":   print(next((c["url"] for c in d.get("cache", []) if c["id"] == a[0]), ""))
@@ -264,6 +273,7 @@ new site here|site.new|s
 new project here|-|
 new project|project.new|n
 label a project|project.label|l
+history|history|h
 custom domain|project.domain|d
 create a new firebase project|new.firebase_project|c
 create|new.create|c
@@ -563,13 +573,18 @@ web_version_guard(){ # $1 root -> on a main-website publish, shows the version a
   echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || return 0
   [ "$v" = "$(vc proj_get "$root" last_prod_version)" ] && repeat=yes
   step "Version  ${B}$v${R}$([ "$repeat" = yes ] && printf "  ${Y}live already${R}")"
-  MENU_ITEMS=("publish as $v" "bump"); MENU_NOTES=("" "  ${D}next is $(bump_version "$v" patch), or type your own${R}")
-  [ "$(menu_pick "Version" "$([ "$repeat" = yes ] && echo 1 || echo 0)")" = 0 ] && return 0
-  while :; do
-    nv="$(ask "New version" "$(bump_version "$v" patch)")"
-    echo "$nv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' && break
-    warn "“${nv}” is not a version like 1.0.1"
-  done
+  if [ -n "$WANT_VERSION" ]; then   # answered up front: keep, next, or a version
+    case "$WANT_VERSION" in keep) return 0 ;; next) nv="$(bump_version "$v" patch)" ;; *) nv="$WANT_VERSION" ;; esac
+    echo "$nv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || die "“${nv}” is not a version like 1.0.1"
+  else
+    MENU_ITEMS=("publish as $v" "bump"); MENU_NOTES=("" "  ${D}next is $(bump_version "$v" patch), or type your own${R}")
+    [ "$(menu_pick "Version" "$([ "$repeat" = yes ] && echo 1 || echo 0)")" = 0 ] && return 0
+    while :; do
+      nv="$(ask "New version" "$(bump_version "$v" patch)")"
+      echo "$nv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' && break
+      warn "“${nv}” is not a version like 1.0.1"
+    done
+  fi
   [ "$nv" = "$v" ] && return 0
   [ "$DRY" = yes ] && { row "package" "would become version: ${D}$v${R} → ${B}$nv${R}  ${D}(dry run, not written)${R}"; return 0; }
   cmd "npm version $nv --no-git-tag-version"
@@ -646,7 +661,8 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   if [ "$host" = firebase ]; then
     [ "$DRY" = yes ] && { dry_deploy_firebase "$acct" "$pid" "$root" "$pm"; dry_mail "$pid" "${label:-$pname}" "${ver:-—}" "https://${pid#*/}.web.app" "$notes" || true; exit 0; }
     publish_firebase "$acct" "$pid" "$root" "$pm"
-    mail_after "$pid" "${label:-$pname}" "${ver:-—}" "$URL" "$notes" "$root"; return
+    mail_after "$pid" "${label:-$pname}" "${ver:-—}" "$URL" "$notes" "$root"
+    vc hist_add "$pid" "${ver:-—}" "$([ "$PROD" = yes ] && echo main || echo test)" "$URL" "$acct" "${MAILED:-0}"; return
   fi
 
   token="$(acct_token "$acct")"; team="$(vc acct_get "$acct" team_id)"
@@ -667,7 +683,6 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   log="$stage-deploy.log"
   url="$(cd "$stage" && vercel deploy --yes $flag "${AUTH[@]}" 2> >(tee "$log" >&2))" || fail "Vercel rejected the deploy — nothing was published" "$log"
   [ -n "$url" ] || fail "Vercel finished but returned no URL" "$log"
-  vc stat_add "$pid"
   if [ "$PROD" = yes ]; then
     domain="$(vc domain "$token" "${team:--}" "$pid" 2>/dev/null)"; [ -n "$domain" ] && [ "${domain#ERR}" = "$domain" ] && url="https://$domain"
   fi
@@ -682,6 +697,7 @@ deploy(){ # $1 account  $2 project id (Firebase: project/site)  $3 name  $4 fold
   [ -n "$also" ] && row "also" "${also}  ${D}stays as is${R}"
   URL="$url"; ALSO="$also"
   mail_after "$pid" "${label:-$pname}" "${ver:-—}" "$URL" "$notes" "$root"
+  vc hist_add "$pid" "${ver:-—}" "$([ "$PROD" = yes ] && echo main || echo test)" "$URL" "$acct" "${MAILED:-0}"
 }
 
 URL=""; ALSO=""; DONE_ID=""; DONE_NAME=""
@@ -717,13 +733,24 @@ done_menu(){ # $1 host $2 account $3 project id $4 name $5 folder -> after a pub
 
 # ── main ──────────────────────────────────────────────────────────────────
 PROD=""; ROOT=""; DRY=no
+WANT_PROJECT=""; WANT_VERSION=""; WANT_DOMAIN=""; WANT_DOMCHECK=""   # --project <id> picks the project; --version keep|<x> answers the version step; --domain / --domain-check instead of a publish
 main(){
   local arg rows=() a id nm u f note sel idx r folder i
-  for arg in "$@"; do
+  while [ $# -gt 0 ]; do
+    arg="$1"; shift
     case "$arg" in
       --prod|--production) PROD=yes ;;
       --preview)           PROD=no ;;
       --dry-run|-n)        DRY=yes ;;
+      --project)           WANT_PROJECT="${1:-}"; shift ;;
+      --version=*)         WANT_VERSION="${arg#*=}" ;;
+      --domain)            WANT_DOMAIN="${1:-}"; shift ;;
+      --domain-check)      WANT_DOMCHECK=yes ;;
+      --notes)             WANT_NOTES="${1:--}"; shift ;;
+      --no-notes)          WANT_NOTES="-" ;;
+      --mail)              WANT_MAIL=yes ;;
+      --no-mail)           WANT_MAIL=no ;;
+      --yes|-y)            YES=yes ;;
       accounts)            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "accounts"; accounts_menu; exit 0 ;;
       mailbox)             [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "mailbox"; { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
       --version|-V|-v)     echo "ship-site $VERSION"; exit 0 ;;
@@ -736,12 +763,21 @@ main(){
         printf "    ${A}ship-site ~/site${R}      treat that folder as the current project\n"
         printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts\n"
         printf "    ${A}ship-site mailbox${R}     the account the link is mailed from, shared with ship-apk\n\n"
+        printf "  ${B}Without questions${R}  ${D}for scripts and the web page: every answer given up front${R}\n"
+        printf "    ${A}--project <id>${R}        the project: a Vercel project id, or Firebase <project>/<site>\n"
+        printf "    ${A}--version=keep|next|X${R} publish as is, bump the patch, or set a version\n"
+        printf "    ${A}--notes <text>${R}        what changed, for the mail; ${A}--notes git${R} takes the commit titles; ${A}--no-notes${R}\n"
+        printf "    ${A}--mail${R} / ${A}--no-mail${R}      send the link to the project's people, or not\n"
+        printf "    ${A}--yes${R}                 take every confirmation as yes\n"
+        printf "    ${A}--domain <name>${R}       with --project: connect your own domain to that site and show the records to add, no publish\n"
+        printf "    ${A}--domain-check${R}        with --project: ask Firebase where its domain stands — waiting for DNS, up on http, or live\n"
+        printf "  ${D}  ship-site --project sukun-garden/admin --prod --version=next --mail --notes git --yes ~/Code/admin${R}\n\n"
         printf "  ${D}Run inside a web project and the project it publishes to is preselected. Settings live in %s${R}\n\n" "$CONF"
         exit 0 ;;
       *) ROOT="${arg/#\~/$HOME}"; is_project "$ROOT" || die "no package.json and no index.html in $ROOT" ;;
     esac
   done
-  [ -t 0 ] || die "ship-site needs a terminal — run it, do not pipe into it"
+  [ -t 0 ] || [ -n "$WANT_PROJECT" ] || die "ship-site needs a terminal — run it, do not pipe into it; without one, say everything with --project and friends"
   have python3 || die "python3 is required (it ships with macOS developer tools)"
   have npm || { have brew && need "node and npm" npm "brew install node"; } || have npm || die "node is required for the Vercel and Firebase CLIs — install it from https://nodejs.org then run again"
   [ -n "$ROOT" ] || ROOT="$(find_root)" || ROOT=""
@@ -757,6 +793,22 @@ main(){
   fi
 
   local h lb rc fbsite vid names rank why best rcseen kind=() grp lines g pj cnt last dom dst pc pgrp ind st
+  if [ -n "$WANT_PROJECT" ]; then   # straight to the publish: the project by id, the folder given or remembered
+    r="$(vc landing | awk -F$'\x1f' -v id="$WANT_PROJECT" '$2 == id {print; exit}')"
+    [ -n "$r" ] || die "no project with id “${WANT_PROJECT}” in your list — run ship-site and refresh, or check the id"
+    IFS=$'\x1f' read -r a id nm u f h _ <<<"$r"   # the row carries more fields; _ takes the rest
+    if [ -n "$WANT_DOMAIN" ]; then domain_connect "$h" "$a" "$id" "$nm" "$WANT_DOMAIN"; exit $?; fi
+    if [ -n "$WANT_DOMCHECK" ]; then
+      [ "$h" = firebase ] || { row "domain" "$(vc domain_get "$id")  ${D}kept as a reminder; Vercel shows its state on vercel.com${R}"; exit 0; }
+      [ -n "$(vc domain_get "$id")" ] || { warn "no domain saved for ${nm} — ship-site --project ${id} --domain <name>"; exit 1; }
+      domain_status "$a" "$id" loud; exit 0
+    fi
+    folder="${ROOT:-$f}"; [ -n "$folder" ] && is_project "$folder" || die "no folder for ${nm} — give one: ship-site --project ${id} ~/the/folder"
+    [ -n "$PROD" ] || die "say --prod or --preview with --project"
+    deploy "$a" "$id" "$nm" "$folder" "$h" || exit 1
+    [ "$YES" = yes ] || [ ! -t 0 ] || done_menu "$h" "$a" "$DONE_ID" "$DONE_NAME" "$folder"
+    exit 0
+  fi
   # what this folder says about where it deploys: its .firebaserc, firebase.json, .vercel/project.json, and its names
   rc=""; fbsite=""; vid=""; names=""
   if [ -n "$ROOT" ]; then
@@ -796,17 +848,18 @@ main(){
     done <<<"$lines"
     [ -n "$grp" ] && { MENU_ITEMS+=("  + new project here"); MENU_NOTES+=("  ${D}in ${grp}${R}"); kind+=("newin"$'\x1f'"$gh"$'\x1f'"$ga"); }
     [ ${#rows[@]} -gt 0 ] && { MENU_ITEMS+=($'\x01'); MENU_NOTES+=(""); kind+=(head); }   # a blank line sets the actions apart
-    MENU_ITEMS+=("  + new project" "  label a project" "  custom domain" "  mailbox" "  accounts" "  refresh" "  quit")
+    MENU_ITEMS+=("  + new project" "  label a project" "  custom domain" "  history" "  mailbox" "  accounts" "  refresh" "  quit")
     MENU_NOTES+=("  ${D}a Vercel project or a Firebase site, by name${R}" "  ${D}your own name for one: admin, landing, the domain it serves${R}"
                  "  ${D}connect your own domain to a Firebase site; shows the DNS records to add${R}"
+                 "  ${D}every publish of a project: when, version, main or test, link${R}"
                  "  ${D}$([ "$(mbox smtp_ready)" = yes ] && mbox smtp_get user || echo 'not set up yet') · the link can be mailed after a publish · shared with ship-apk${R}"
                  "  ${D}Vercel and Firebase: add, remove, sign in again${R}" "  ${D}fetch the project list again${R}" "")
-    kind+=(new label domain mailbox accounts refresh quit)
+    kind+=(new label domain history mailbox accounts refresh quit)
     [ "$sel" -ge 0 ] || sel=0
     step "Projects"
     [ -n "$ROOT" ] && sub "you are in $(sed "s|^$HOME|~|" <<<"$ROOT")"
     [ -n "$rc" ] && [ "$rcseen" = no ] && sub "${Y}this folder's .firebaserc names Firebase project “${rc}”, which none of your signed-in accounts can see — add its Google account under accounts${R}"
-    MENU_FIXED=$([ ${#rows[@]} -gt 0 ] && echo 8 || echo 7)   # the actions stay on screen; only the projects scroll
+    MENU_FIXED=$([ ${#rows[@]} -gt 0 ] && echo 9 || echo 8)   # the actions stay on screen; only the projects scroll
     MENU_NOKEY=""; for i in "${!kind[@]}"; do case "${kind[$i]}" in row:*) MENU_NOKEY="$MENU_NOKEY $i" ;; esac; done
     idx="$(menu_pick "Pick one to publish" "$sel")"; MENU_FIXED=0; MENU_NOKEY=""   # set for that menu only; it ran in a subshell
     case "${kind[$idx]}" in
@@ -816,18 +869,21 @@ main(){
          folder="$(choose_folder "")" || continue
          IFS=$'\t' read -r h a id nm <<<"$r"
          deploy "$a" "$id" "$nm" "$folder" "$h" || continue; done_menu "$h" "$a" "$DONE_ID" "$DONE_NAME" "$folder"; continue ;;
-      label|domain)
+      label|domain|history)
          [ ${#rows[@]} -gt 0 ] || { warn "no projects yet"; continue; }
          local k; MENU_ITEMS=(); MENU_NOTES=()
          for k in "${rows[@]}"; do IFS=$'\x1f' read -r a id nm f h <<<"$k"; MENU_ITEMS+=("$(printf '%-28s' "$nm")"); MENU_NOTES+=("  ${D}$(vc label_get "$id")${R}"); done
          MENU_ITEMS+=("← back"); MENU_NOTES+=("")
-         step "$([ "${kind[$idx]}" = label ] && echo 'Label which project' || echo 'Custom domain for which site')"
+         case "${kind[$idx]}" in label) step "Label which project" ;; domain) step "Custom domain for which site" ;; *) step "History of which project" ;; esac
          MENU_NOKEY="$(nokey_rows "${#rows[@]}")"
          r="${kind[$idx]}"; idx="$(menu_pick "Project" 0)"; MENU_NOKEY=""
          [ "$idx" -lt ${#rows[@]} ] || continue
          IFS=$'\x1f' read -r a id nm f h <<<"${rows[$idx]}"
          if [ "$r" = domain ]; then
            custom_domain "$h" "$a" "$id" "$nm"; continue
+         fi
+         if [ "$r" = history ]; then
+           show_history "$id" "$(vc label_get "$id" | grep . || echo "$nm")" vc; continue
          fi
          vc label_set "$id" "$(ask "Label for ${nm} (blank removes it)" "$(vc label_get "$id")")"
          ok "saved — only a name for you, nothing changes on $([ "$h" = firebase ] && echo Firebase || echo Vercel)"
