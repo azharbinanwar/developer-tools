@@ -272,27 +272,45 @@ def start_account(body):
         if team: args += ["--team", team]
     if op == "remove": args.append(name)
     return run(args, env=env, kind="accounts", id=host)
+CACHE = os.path.join(CONF, "developer-tools", "github.json")
+def remembered(key, fresh):
+    """what GitHub said last time, kept so a failed call shows the last answer quietly instead of an error; fresh() returns the new value or None"""
+    try: c = json.load(open(CACHE))
+    except Exception: c = {}
+    v = fresh()
+    if v is not None:
+        c[key] = {"at": time.time(), "value": v}
+        try: os.makedirs(os.path.dirname(CACHE), exist_ok=True); json.dump(c, open(CACHE, "w"))
+        except Exception: pass
+        return v, 0
+    old = c.get(key)
+    return (old["value"], old["at"]) if old else (None, 0)
 def updates():
-    """installed versions, the channel and the newest release on it, from the hub itself (one network call)"""
+    """installed versions, the channel and the newest release on it; the newest comes from GitHub, or from the last answer when GitHub is out of reach"""
     try: out = subprocess.run([SELF, "versions"], capture_output=True, text=True, timeout=20, env=dict(os.environ, TERM="dumb")).stdout
     except Exception as e: return {"error": "could not ask the hub: %s" % e}
     rows = dict(l.split("\t", 1) for l in out.splitlines() if "\t" in l)
     tools = [dict(name=t, version="" if rows.get(t, "-") == "-" else rows.get(t, "")) for t in ("ship-site", "ship-apk", "developer-tools")]
-    return {"tools": tools, "channel": rows.get("channel", "stable"), "latest": rows.get("latest", ""), "bin": "/usr/local/bin"}
+    channel = rows.get("channel", "stable")
+    latest, at = remembered("latest-" + channel, lambda: rows.get("latest") or None)
+    return {"tools": tools, "channel": channel, "latest": latest or "", "as_of": at, "bin": "/usr/local/bin"}
 def set_channel(body):
     c = body.get("channel")
     if c not in ("stable", "beta"): return {"error": "Choose stable or beta."}
     r = subprocess.run([SELF, c], capture_output=True, text=True, env=dict(os.environ, TERM="dumb"))
     return {"ok": True} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[-200:]}
 def releases():
-    """GitHub's releases, newest first, through the hub (one network call)"""
-    try: out = subprocess.run([SELF, "releases"], capture_output=True, text=True, timeout=20, env=dict(os.environ, TERM="dumb")).stdout
-    except Exception as e: return {"error": "could not ask the hub: %s" % e}
-    rows = []
-    for l in out.splitlines():
-        p = l.split("\t", 3)
-        if len(p) == 4: rows.append(dict(tag=p[0], version=p[0].lstrip("v"), beta=p[1] == "beta", date=p[2], notes=p[3].replace("\\n", "\n")))
-    return {"releases": rows}
+    """GitHub's releases, newest first, through the hub; the last answer when GitHub is out of reach"""
+    def fresh():
+        try: out = subprocess.run([SELF, "releases"], capture_output=True, text=True, timeout=20, env=dict(os.environ, TERM="dumb")).stdout
+        except Exception: return None
+        rows = []
+        for l in out.splitlines():
+            p = l.split("\t", 3)
+            if len(p) == 4: rows.append(dict(tag=p[0], version=p[0].lstrip("v"), beta=p[1] == "beta", date=p[2], notes=p[3].replace("\\n", "\n")))
+        return rows or None
+    rows, at = remembered("releases", fresh)
+    return {"releases": rows or [], "as_of": at}
 def start_update(body):
     """developer-tools install [version]: every tool and the hub itself, streamed like any run"""
     v = str(body.get("version", "")).strip().lstrip("v")
@@ -511,6 +529,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/mail_test": return self.send(200, json.dumps(start_mail_test(body)).encode(), "application/json")
         if u.path == "/api/accounts": return self.send(200, json.dumps(start_account(body)).encode(), "application/json")
         if u.path == "/api/channel": return self.send(200, json.dumps(set_channel(body)).encode(), "application/json")
+        if u.path == "/api/stop":   # the page's Stop: answer, then leave; the hub's shell notices and says so
+            self.send(200, b'{"ok": true}', "application/json"); threading.Timer(0.3, lambda: os._exit(0)).start(); return
         if u.path == "/api/updates": return self.send(200, json.dumps(updates()).encode(), "application/json")
         if u.path == "/api/update": return self.send(200, json.dumps(start_update(body)).encode(), "application/json")
         if u.path == "/api/releases": return self.send(200, json.dumps(releases()).encode(), "application/json")
@@ -526,11 +546,16 @@ def watch_parent():   # the hub's shell started us; when it is gone (we got repa
         time.sleep(2)
         if os.getppid() == 1: os._exit(0)
 threading.Thread(target=watch_parent, daemon=True).start()
+class Local(ThreadingHTTPServer):
+    def server_bind(self):   # http.server looks up the machine's full host name here, which can stall for a long time on some Macs; we only ever serve 127.0.0.1
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
 srv = None
 for _ in range(8):    # the previous server may still be letting go of the port; wait a moment for it rather than move
-    try: srv = ThreadingHTTPServer(("127.0.0.1", want), H); break
+    try: srv = Local(("127.0.0.1", want), H); break
     except OSError: time.sleep(0.25)
-if srv is None: srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+if srv is None: srv = Local(("127.0.0.1", 0), H)
 PORT = srv.server_address[1]
 try:
     os.makedirs(os.path.dirname(UI), exist_ok=True); json.dump({"port": PORT, "token": TOKEN}, open(UI, "w")); os.chmod(UI, 0o600)
