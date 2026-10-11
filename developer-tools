@@ -1263,11 +1263,16 @@ def watch_parent():   # the hub's shell started us; when it is gone (we got repa
         time.sleep(2)
         if os.getppid() == 1: os._exit(0)
 threading.Thread(target=watch_parent, daemon=True).start()
+class Local(ThreadingHTTPServer):
+    def server_bind(self):   # http.server looks up the machine's full host name here, which can stall for a long time on some Macs; we only ever serve 127.0.0.1
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
 srv = None
 for _ in range(8):    # the previous server may still be letting go of the port; wait a moment for it rather than move
-    try: srv = ThreadingHTTPServer(("127.0.0.1", want), H); break
+    try: srv = Local(("127.0.0.1", want), H); break
     except OSError: time.sleep(0.25)
-if srv is None: srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+if srv is None: srv = Local(("127.0.0.1", 0), H)
 PORT = srv.server_address[1]
 try:
     os.makedirs(os.path.dirname(UI), exist_ok=True); json.dump({"port": PORT, "token": TOKEN}, open(UI, "w")); os.chmod(UI, 0o600)
