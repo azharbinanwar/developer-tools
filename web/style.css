@@ -54,7 +54,7 @@ button,input,textarea,select{font:inherit;letter-spacing:inherit}button{cursor:p
 .tile-meta{font-size:12px;line-height:16px;color:var(--on-surface-variant);white-space:nowrap;margin-inline-start:12px}.tile.sel .tile-meta{color:var(--primary)}
 .tile .chev{transition:transform 180ms var(--ease)}.tile.open .chev{transform:rotate(180deg)}
 .tg{width:100%;padding-bottom:12px}.tg-head{display:flex;align-items:baseline;padding:0 4px 8px;gap:8px}.tg-title{flex:1;font-size:14px;line-height:20px;font-weight:600;letter-spacing:.1px;color:var(--primary)}
-.tg-warning{color:var(--warning)}.tg-error{color:var(--error)}.tg-success{color:var(--success)}.tg-aside{font-size:12px;color:var(--on-surface-variant)}
+.tg-warning{color:var(--warning)}.tg-error{color:var(--error)}.tg-success{color:var(--success)}.tg-aside{font-size:12px;color:var(--on-surface-variant);text-align:right}.tg-aside .lnk{color:var(--primary);cursor:pointer;font-weight:500}.tg-aside .lnk:hover{text-decoration:underline}
 .tg-list{display:flex;flex-direction:column;gap:4px}
 .fold{display:grid;grid-template-rows:1fr;transition:grid-template-rows var(--dur-base) var(--ease)}.fold.closed{grid-template-rows:0fr}.fold>div{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:4px}.tg .fold:not(.closed)>div{padding-top:4px}.tg-list>.fold>div{gap:4px}.tile-sub .bad{color:var(--error)}
 

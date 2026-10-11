@@ -670,6 +670,8 @@ FAKE
   check "ui mailbox: an unknown placeholder saves with a note" grep -q 'stays as typed' <<<"$(curl -s -X POST --data '{"op":"template","kind":"site","subject":"{app} {verison}","body":"x {link}"}' "${uiurl/\/?t=//api/mailbox?t=}")"
   curl -s -X POST --data '{"op":"template","kind":"site","subject":"{app} {version} is live","body":"Hi {name},\n\n{link}{notes}\n\n{sender}"}' "${uiurl/\/?t=//api/mailbox?t=}" >/dev/null
   check "ui mail test: a bad address is refused"              grep -q '"error"' <<<"$(curl -s -X POST --data '{"to":"nope"}' "${uiurl/\/?t=//api/mail_test?t=}")"
+  check "ui channel: a bad channel is refused"                grep -q '"error"' <<<"$(curl -s -X POST --data '{"channel":"nope"}' "${uiurl/\/?t=//api/channel?t=}")"
+  check "hub versions: one line per tool plus channel and latest" bash -c 'bash developer-tools versions 2>/dev/null | grep -c "^ship-site\|^ship-apk\|^developer-tools\|^channel\|^latest" | grep -qx 5'
   check "ui accounts: a bad request is refused"               grep -q '"error"' <<<"$(curl -s -X POST --data '{"op":"nope","host":"vercel"}' "${uiurl/\/?t=//api/accounts?t=}")"
   check "ui ship: a bad request is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"","fresh":true}' "${uiurl/\/?t=//api/ship?t=}")"
   check "ui ship: a bad version is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"x","version":"nope"}' "${uiurl/\/?t=//api/ship?t=}")"
