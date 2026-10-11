@@ -285,6 +285,38 @@ def run_state(meta):
     """(done, code): the code file says it ended; a dead process with no code file crashed"""
     try: return True, int(open(os.path.join(RUNDIR, meta["run"] + ".code")).read().strip() or 1)
     except Exception: return (False, None) if alive(meta.get("pid", 0)) else (True, 1)
+def page_runs(kind, pid, n=10):
+    """the last runs this page started for one project, newest first, with their log: how a failed one is read later"""
+    rows = []
+    try: names = sorted(f[:-5] for f in os.listdir(RUNDIR) if f.endswith(".json"))
+    except Exception: return rows
+    for rid in reversed(names):
+        m = run_meta(rid)
+        if not m or m.get("kind") != kind or m.get("id") != pid: continue
+        done, code = run_state(m)
+        try: log = open(os.path.join(RUNDIR, rid + ".log"), errors="replace").read()[-20000:]
+        except Exception: log = ""
+        rows.append(dict(run=rid, when=when(m["started"]), done=done, code=code, dry=bool(m.get("dry")), command=m.get("command", ""), log=log))
+        if len(rows) >= n: break
+    return rows
+def open_log(body):
+    """open one run's log file in the default app (TextEdit, Console); only files under RUNDIR"""
+    rid, want = str(body.get("run", "")), str(body.get("path", ""))
+    if want:   # a path printed in a log: only files under the tools' config folder
+        f = os.path.realpath(want)
+        if not f.startswith(os.path.realpath(CONF) + os.sep) or not os.path.isfile(f): return {"error": "not a log of ours"}
+        subprocess.Popen(["open", f] if sys.platform == "darwin" else ["xdg-open", f], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return {"ok": True}
+    if not re.match(r"^[0-9a-f-]+$", rid): return {"error": "no such run"}
+    f = os.path.join(RUNDIR, rid + ".log")
+    if not os.path.isfile(f): return {"error": "the log is gone"}
+    # a failed build names the tool's own build log (flutter's or npm's full output): that is the file worth reading
+    try: txt = open(f, errors="replace").read()
+    except Exception: txt = ""
+    m = re.search(r"(?:the build failed|build log).*?(/\S+-build\.log)", txt) or re.search(r"\blog\s+(/\S+\.log)", txt)
+    if m and os.path.isfile(m.group(1)) and re.search(r"the build failed|npm ERR|error", txt, re.I): f = m.group(1)
+    try: subprocess.Popen(["open", f] if sys.platform == "darwin" else ["xdg-open", f], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e: return {"error": str(e)}
+    return {"ok": True, "path": f}
 def active_runs():
     """every run still going, newest first"""
     rows = []
@@ -325,13 +357,13 @@ def data():
         sites.append(dict(account=c["account"], host=h, id=c["id"], name=c["name"], url=c["url"], project=c.get("project", ""),
                           label=labels.get(c["id"], ""), folder=f, count=st.get("count", 0), last=ago(st.get("last")), version=pkg_version(f), commits=commits(f),
                           static=bool(f) and not (json.load(open(os.path.join(f, "package.json"))).get("scripts", {}).get("build") if os.path.exists(os.path.join(f, "package.json")) else False),
-                          domain=doms.get(c["id"], ""), domain_state=dstate.get(c["id"], ""), history=hist(history.get(c["id"])),
+                          domain=doms.get(c["id"], ""), domain_state=dstate.get(c["id"], ""), history=hist(history.get(c["id"])), runs=page_runs("publish", c["id"]),
                           mail={k: mm.get(k, []) for k in ("to", "cc", "bcc")} | {"subject": mm.get("subject", "")}))
     sites.sort(key=lambda x: (x["host"] != "vercel", x["account"].lower(), x["id"].split("/")[0], x["name"]))
     apps = []
     for k, p in sorted(a.get("projects", {}).items()):
         apps.append(dict(key=k, app=p.get("app") or k, path=p.get("path", ""), app_id=p.get("app_id", ""), count=p.get("count", 0),
-                         last=ago(p.get("last")), history=hist(p.get("history")), version=pubspec_version(p.get("path", "")), commits=commits(p.get("path", "")),
+                         last=ago(p.get("last")), history=hist(p.get("history")), runs=page_runs("ship", k), version=pubspec_version(p.get("path", "")), commits=commits(p.get("path", "")),
                          creds=bool(p.get("user_id") and p.get("key")), user_id=p.get("user_id", ""), api_key=p.get("key", ""), account=a.get("accounts", {}).get(p.get("user_id", ""), ""), last_apk=last_apk(p.get("path", "")),
                          mail={f: p.get(f, []) for f in ("to", "cc", "bcc")} | {"subject": p.get("subject", "")}))
     smtp = m.get("smtp", {})
@@ -376,6 +408,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/label": return self.send(200, json.dumps(label_edit(body)).encode(), "application/json")
         if u.path == "/api/link": return self.send(200, json.dumps(link_folder(body)).encode(), "application/json")
         if u.path == "/api/app": return self.send(200, json.dumps(app_edit(body)).encode(), "application/json")
+        if u.path == "/api/open_log": return self.send(200, json.dumps(open_log(body)).encode(), "application/json")
         self.send(404, b"not found", "text/plain")
 
 UI = os.path.join(CONF, "developer-tools", "ui.json")

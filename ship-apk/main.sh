@@ -447,8 +447,8 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
   [ "$DRY" = yes ] && { dry_ship "$key" "$root" "$name" "$version" "$fresh" "$apk" "$want_mail" "$notes"; return; }
 
   # 3. nothing below asks anything — walk away
-  if [ "$fresh" = yes ]; then apk="$(build_apk "$root")" || return 0; fi
-  [ -n "$apk" ] || return 0
+  if [ "$fresh" = yes ]; then apk="$(build_apk "$root")" || { [ -n "$WANT_APP" ] && return 1; return 0; }; fi
+  [ -n "$apk" ] || { [ -n "$WANT_APP" ] && return 1; return 0; }
   until do_upload "$apk" "$key" "$name" "$version"; do
     [ -n "$WANT_APP" ] && return 1
     MENU_ITEMS=("retry the upload" "back to apps" "quit"); MENU_NOTES=("  ${D}same APK, no rebuild${R}" "" "")
