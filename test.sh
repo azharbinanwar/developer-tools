@@ -627,7 +627,7 @@ FAKE
   out="$(bash -c 'source ./ship-site/ship-site; mail_step shop-1/shop-1 Shop < <(printf "x"); echo "mail=$MAIL"' 2>&1)"
   check "site mail: nobody yet offers the project's email"   grep -q "set up this project's email" <<<"$out"
   vc acct_set ui_me scope ui; vc cache_add ui_me prj_ui ui-site ui-site.vercel.app; vc label_set prj_ui mine; vc hist_add prj_ui 1.0.0 main https://ui-site.vercel.app ui_me 2
-  uiout="$(mktemp)"; ( PATH="$fbin2:$PATH" bash -c 'source ./developer-tools; ui_serve --no-open' </dev/null >"$uiout" 2>&1 & ); for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q 'http://127.0.0.1' "$uiout" && break; sleep 0.3; done
+  uiout="$(mktemp)"; ( PATH="$fbin2:$PATH" bash -c 'source ./developer-tools; ui_serve --no-open' </dev/null >"$uiout" 2>&1 & ); for _ in $(seq 1 60); do grep -q 'http://127.0.0.1' "$uiout" && break; sleep 0.3; done   # a CI Mac starts python slowly; give the link up to 18 s
   uiurl="$(sed -n 's/.*\(http:\/\/127.0.0.1:[0-9]*\/?t=[0-9a-f]*\).*/\1/p' "$uiout" | head -1)"
   check "ui: prints a local link with a key"                 grep -q '127.0.0.1:[0-9]*/?t=[0-9a-f]\{32\}' <<<"$uiurl"
   check "ui: the page is served"                             bash -c 'curl -s "$1" | grep -q "<title>developer-tools</title>"' _ "$uiurl"
