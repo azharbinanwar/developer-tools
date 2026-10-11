@@ -32,8 +32,8 @@ import json, os, sys, urllib.request, urllib.error, urllib.parse
 
 path, op = sys.argv[1], sys.argv[2]
 a = sys.argv[3:]
-try: d = json.load(open(path))
-except Exception: d = {}
+exec(os.environ.get("DT_LOAD", "def load_json(p):\n    import json\n    try: return json.load(open(p))\n    except Exception: return {}"))
+d = load_json(path)
 d.setdefault("accounts", {}); d.setdefault("projects", {})
 
 def save():
@@ -108,6 +108,25 @@ if   op == "accounts":  [print(n) for n in sorted(d["accounts"])]
 elif op == "acct_get":  print(d["accounts"].get(a[0], {}).get(a[1], ""))
 elif op == "acct_set":  d["accounts"].setdefault(a[0], {})[a[1]] = a[2]; save()
 elif op == "acct_del":  d["accounts"].pop(a[0], None); save()
+elif op == "acct_rekey":    # old new -> an account moves to a new key everywhere it is referred to; its label and sign-in come along
+    if a[0] in d["accounts"] and a[1] not in d["accounts"]:
+        d["accounts"][a[1]] = d["accounts"].pop(a[0])
+        for c in d.get("cache", []):
+            if c.get("account") == a[0]: c["account"] = a[1]
+        for pr in d.get("projects", {}).values():
+            if pr.get("account") == a[0]: pr["account"] = a[1]
+        al = d.setdefault("acct_labels", {}); al["vercel|" + a[1]] = al.pop("vercel|" + a[0], a[0])
+        for h in d.get("history", {}).values():
+            for r in h:
+                if r.get("account") == a[0]: r["account"] = a[1]
+        save(); print("ok")
+elif op == "acct_label":    # host id [label] -> the label shown for an account; the id (Vercel name, Google address) stays what the tools use
+    k = a[0] + "|" + a[1]
+    if len(a) > 2:
+        if a[2]: d.setdefault("acct_labels", {})[k] = a[2]
+        else: d.get("acct_labels", {}).pop(k, None)
+        save()
+    else: print(d.get("acct_labels", {}).get(k, ""))
 elif op == "proj_get":  print(d["projects"].get(a[0], {}).get(a[1], ""))
 elif op == "proj_set":  d["projects"].setdefault(a[0], {})[a[1]] = a[2]; save()
 # vercel
@@ -338,7 +357,7 @@ accounts_menu(){
   local names=() kinds=() n idx
   while :; do
     names=(); kinds=(); MENU_ITEMS=(); MENU_NOTES=()
-    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); kinds+=(vercel); MENU_ITEMS+=("$(printf '%-28s' "$n")"); MENU_NOTES+=("  ${D}Vercel   · $(vc acct_get "$n" scope) · $([ -f "$ACCTS/$n/token" ] && echo token || echo 'browser sign-in')${R}"); }; done < <(vc accounts)
+    while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); kinds+=(vercel); MENU_ITEMS+=("$(printf '%-28s' "$(acct_show "$n")")"); MENU_NOTES+=("  ${D}Vercel   · $(vc acct_get "$n" scope) · $([ -f "$ACCTS/$n/token" ] && echo token || echo 'browser sign-in')${R}"); }; done < <(vc accounts)
     while IFS= read -r n; do [ -n "$n" ] && { names+=("$n"); kinds+=(firebase); MENU_ITEMS+=("$(printf '%-28s' "$n")"); MENU_NOTES+=("  ${D}Firebase · Google sign-in${R}"); }; done < <(fb_logins)
     MENU_ITEMS+=("+ add a Vercel account" "+ add a Firebase account" "← back"); MENU_NOTES+=("" "" "")
     step "Accounts"
@@ -735,7 +754,7 @@ done_menu(){ # $1 host $2 account $3 project id $4 name $5 folder -> after a pub
 PROD=""; ROOT=""; DRY=no
 WANT_PROJECT=""; WANT_VERSION=""; WANT_DOMAIN=""; WANT_DOMCHECK=""   # --project <id> picks the project; --version keep|<x> answers the version step; --domain / --domain-check instead of a publish
 main(){
-  local arg rows=() a id nm u f note sel idx r folder i
+  local arg rows=() a id nm u f note sel idx r folder i how tm
   while [ $# -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
@@ -753,7 +772,25 @@ main(){
       --mail)              WANT_MAIL=yes ;;
       --no-mail)           WANT_MAIL=no ;;
       --yes|-y)            YES=yes ;;
-      accounts)            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "accounts"; accounts_menu; exit 0 ;;
+      accounts)            banner "ship-site $VERSION" "accounts"
+                           case "${1:-}" in   # accounts add vercel <name> [--token] [--team <slug>] · accounts add firebase · accounts remove vercel <name> · accounts remove firebase <email>
+                             add) case "${2:-}" in
+                                    vercel) need_vercel; shift 2; nm=""; how=browser; tm=""
+                                            while [ $# -gt 0 ]; do case "$1" in --token) how=token ;; --team) tm="${2:-}"; shift ;; -*) die "accounts add vercel [name] [--token] [--team <slug>]" ;; *) nm="$1" ;; esac; shift; done
+                                            add_account "$nm" "$how" "$tm" >/dev/null || exit 1; refresh; exit 0 ;;
+                                    firebase) add_fb_account || exit 1; refresh; exit 0 ;;
+                                    *) die "accounts add vercel <name> | accounts add firebase" ;; esac ;;
+                             rename) [ -n "${2:-}" ] && [ -n "${3:-}" ] || die "accounts rename vercel|firebase <id> <label>"
+                                     case "$2" in vercel) [ -n "$(vc acct_get "$3" org_id)" ] || die "no Vercel account “$3”" ;; firebase) fb_logins | grep -qxF "$3" || die "no Firebase login “$3”" ;; *) die "accounts rename vercel|firebase <id> <label>" ;; esac
+                                     vc acct_label "$2" "$3" "${4:-}"; ok "“$3” shows as “${4:-$3}”"; exit 0 ;;
+                             remove) case "${2:-}" in
+                                    vercel) [ -n "${3:-}" ] || die "accounts remove vercel <name>"; [ -n "$(vc acct_get "$3" org_id)" ] || die "no Vercel account “$3”"
+                                            vc acct_del "$3"; rm -rf "$ACCTS/$3"; vc refresh >/dev/null 2>&1 || true; ok "removed “$3” from this computer; nothing changes on Vercel"; exit 0 ;;
+                                    firebase) [ -n "${3:-}" ] || die "accounts remove firebase <email>"; need_firebase; cmd "firebase logout $3"; firebase logout "$3" >&2 || exit 1; vc fb_refresh >/dev/null 2>&1 || true; ok "signed out “$3”; nothing changes on Firebase"; exit 0 ;;
+                                    *) die "accounts remove vercel <name> | accounts remove firebase <email>" ;; esac ;;
+                             "") [ -t 0 ] || die "needs a terminal; or: ship-site accounts add|remove …"; accounts_menu; exit 0 ;;
+                             *) die "ship-site accounts [add vercel [--token] [--team <slug>] | add firebase | rename vercel|firebase <id> <label> | remove vercel <name> | remove firebase <email>]" ;;
+                           esac ;;
       mailbox)             if [ "${1:-}" = test ]; then banner "ship-site $VERSION" "mailbox"; smtp_test "${2:-$(mbox smtp_get user)}"; exit $?; fi
                            [ -t 0 ] || die "needs a terminal"; banner "ship-site $VERSION" "mailbox"; { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
       --version|-V)        echo "ship-site $VERSION"; exit 0 ;;
@@ -765,7 +802,7 @@ main(){
         printf "    ${A}ship-site --dry-run${R}   check everything and show what would happen; changes nothing (also -n)\n"
         printf "    ${A}ship-site -V${R}          the version; short flags combine: -ny is -n -y\n"
         printf "    ${A}ship-site ~/site${R}      treat that folder as the current project\n"
-        printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts\n"
+        printf "    ${A}ship-site accounts${R}    add or remove Vercel and Firebase accounts; ${A}accounts add vercel [--token] [--team <slug>]${R}, ${A}add firebase${R}, ${A}rename vercel|firebase <id> <label>${R}, ${A}remove vercel <name>${R}, ${A}remove firebase <email>${R}\n"
         printf "    ${A}ship-site mailbox${R}     the account the link is mailed from, shared with ship-apk; ${A}mailbox test${R} sends a test to yourself\n\n"
         printf "  ${B}Without questions${R}  ${D}for scripts and the web page: every answer given up front${R}\n"
         printf "    ${A}--project <id>${R}        the project: a Vercel project id, or Firebase <project>/<site>\n"
@@ -790,13 +827,14 @@ main(){
   banner "ship-site $VERSION" "build it, publish it, copy the link"
   [ "$DRY" = yes ] && sub "${Y}dry run — checks everything, then shows what it would do; nothing is built, deployed, created or written${R}"
   refresh fresh   # the cached list comes up at once; it is refreshed when older than 10 minutes, or on "refresh"
+  migrate_accounts
   if [ -z "$(vc landing)" ] && [ -z "$(vc accounts)" ] && [ -z "$(vc fb_accounts)" ]; then
     step "No account on this Mac yet"
     add_any_account || { printf "\n" >&2; exit 0; }
     refresh
   fi
 
-  local h lb rc fbsite vid names rank why best rcseen kind=() grp lines g pj cnt last dom dst pc pgrp ind st
+  local h lb rc fbsite vid names rank why best rcseen kind=() grp lines g pj cnt last dom dst pc pgrp ind st l
   if [ -n "$WANT_PROJECT" ]; then   # straight to the publish: the project by id, the folder given or remembered
     r="$(vc landing | awk -F$'\x1f' -v id="$WANT_PROJECT" '$2 == id {print; exit}')"
     [ -n "$r" ] || die "no project with id “${WANT_PROJECT}” in your list — run ship-site and refresh, or check the id"
@@ -827,7 +865,7 @@ main(){
     grp=""; pgrp=""; local ga="" gh=""
     while IFS=$'\x1f' read -r a id nm u f h lb pj cnt last dom dst rank why pc; do
       [ -n "$id" ] || continue
-      g="$a · $([ "$h" = firebase ] && echo Firebase || echo Vercel)"
+      if [ "$h" = firebase ]; then l="$(vc acct_label firebase "$a")"; g="${l:-$a} · Firebase"; else g="$(acct_show "$a") · Vercel"; fi
       if [ "$g" != "$grp" ]; then
         [ -n "$grp" ] && { MENU_ITEMS+=("  + new project here"); MENU_NOTES+=("  ${D}in ${grp}${R}"); kind+=("newin"$'\x1f'"$gh"$'\x1f'"$ga"); }
         MENU_ITEMS+=($'\x01'"$g"); MENU_NOTES+=(""); kind+=(head); grp="$g"; ga="$a"; gh="$h"; pgrp=""

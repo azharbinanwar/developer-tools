@@ -4,6 +4,28 @@
 case "$(uname -s 2>/dev/null)" in Darwin) OS=mac ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS=linux ;; esac
 PY=python3; command -v python3 >/dev/null 2>&1 || PY=python
 py(){ "$PY" "$@"; }
+# every store starts with exec(os.environ["DT_LOAD"]) and d = load_json(path): a hand-edited file that no longer parses is
+# recovered when only its tail is damaged, otherwise copied to <file>.broken-<time> and started again, with one line on stderr
+export DT_LOAD='
+def load_json(path):
+    import json, os, sys, time, shutil
+    if not os.path.exists(path): return {}
+    raw = open(path, errors="replace").read()
+    try: return json.loads(raw)
+    except Exception: pass
+    cut = raw.rfind("}")
+    while cut > 0:   # cut back to a brace and close what is still open: a file cut off mid-way comes back minus its tail
+        for tail in ("", "}", "}}", "}}}"):
+            try:
+                d = json.loads(raw[:cut + 1] + tail); sys.stderr.write("     ! %s was not valid JSON; recovered up to the damage\n" % path); return d
+            except Exception: pass
+        cut = raw.rfind("}", 0, cut)
+    bak = "%s.broken-%s" % (path, time.strftime("%Y%m%d-%H%M%S"))
+    try: shutil.copy(path, bak)
+    except Exception: pass
+    sys.stderr.write("     ! %s could not be read; it is kept as %s and a fresh one starts\n" % (path, os.path.basename(bak)))
+    return {}
+'
 clip(){ # stdin -> the clipboard, whichever tool this machine has; false when there is none
   if command -v pbcopy >/dev/null 2>&1; then pbcopy
   elif command -v wl-copy >/dev/null 2>&1; then wl-copy

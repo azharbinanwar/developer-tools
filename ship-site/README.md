@@ -49,6 +49,8 @@ ship-site --project sukun-garden/admin-sukun-garden --prod --version=next --note
 | `--yes` | every confirmation taken as yes; no done screen afterwards |
 | `--domain <name>` | with `--project`: connect your own domain to that site and print the records to add; no publish |
 | `--domain-check` | with `--project`: where its domain stands — waiting for DNS, up on http, or live |
+| `accounts add vercel [--token] [--team <slug>]`, `accounts add firebase` | add an account without the menu: browser sign-in, or a token in `VERCEL_TOKEN` |
+| `accounts rename vercel\|firebase <id> <label>`, `accounts remove vercel <id>`, `accounts remove firebase <email>` | the label an account shows under; remove or sign out |
 | a folder | the one to build; otherwise the folder the project was last published from |
 
 ## What happens
