@@ -665,6 +665,9 @@ FAKE
   check "ui label: saved into ship-site's store"             is "$(vc label_get prj_ui)" Landing
   curl -s -X POST --data '{"id":"prj_ui","label":""}' "${uiurl/\/?t=//api/label?t=}" >/dev/null
   check "ui label: blank removes it"                         is "$(vc label_get prj_ui)" ""
+  check "ui app: unknown app is refused"                      grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"nope","app_id":"x"}' "${uiurl/\/?t=//api/app?t=}")"
+  check "ui ship: a bad request is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"","fresh":true}' "${uiurl/\/?t=//api/ship?t=}")"
+  check "ui ship: a bad version is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"x","version":"nope"}' "${uiurl/\/?t=//api/ship?t=}")"
   check "ui domain run: a bad request is refused"             grep -q '"error"' <<<"$(curl -s -X POST --data '{"id":"prj_ui","op":"connect","domain":"nope"}' "${uiurl/\/?t=//api/domain_run?t=}")"
   check "ui link: unlink forgets the folder"                  bash -c 'curl -s -X POST --data "{\"id\":\"shop-1/shop-1\",\"op\":\"unlink\"}" "$1" | grep -q "\"ok\"" && [ -z "$(vc folder_of shop-1/shop-1)" ]' _ "${uiurl/\/?t=//api/link?t=}"
   vc proj_set "$p" id shop-1/shop-1; vc proj_set "$p" account ui_me; vc proj_set "$p" name shop-1; vc proj_set "$p" host firebase
@@ -684,6 +687,18 @@ FAKE
   check "flags: --domain connects a domain, no publish"       grep -q "would remember admin.shop.com" <<<"$out"
   out="$(bash ship-site/ship-site --project shop-1/shop-1 --domain-check --yes </dev/null 2>&1 || true)"
   check "flags: --domain-check with no domain says so"        grep -q "no domain saved" <<<"$out"
+  out="$(bash ship-apk/ship-apk --app nope --fresh --no-mail --yes </dev/null 2>&1 || true)"
+  check "apk flags: an unknown app key is explained"          grep -q "no app with key" <<<"$out"
+  fa="$(mktemp -d)"; printf 'name: flagapp\nversion: 1.0.0+1\n' > "$fa/pubspec.yaml"
+  bash -c 'source ./ship-apk/ship-apk; cfg proj_set flagapp path "$1"; cfg proj_set flagapp app FlagApp; cfg proj_set flagapp app_id A1; cfg proj_set flagapp user_id U1; cfg proj_set flagapp key K1' _ "$fa"
+  out="$(bash ship-apk/ship-apk --app flagapp --no-mail --yes </dev/null 2>&1 || true)"
+  check "apk flags: --app needs --fresh or --last-build"      grep -q "say --fresh or --last-build" <<<"$out"
+  out="$(bash ship-apk/ship-apk --app flagapp --last-build --version=next --no-mail --yes --dry-run </dev/null 2>&1 || true)"
+  check "apk flags: a dry run with no terminal and no questions" grep -q "Dry run · would run" <<<"$out"
+  check "apk flags: --version=next raises the build number"   grep -q "1.0.0+2" <<<"$out"
+  check "apk flags: --no-mail answers the Email step"         grep -q "none — skipped" <<<"$out"
+  bash -c 'source ./ship-apk/ship-apk; cfg proj_del flagapp' 2>/dev/null || true; rm -rf "$fa"
+  check "apk flags: listed in --help"                         bash -c 'bash ship-apk/ship-apk --help 2>&1 | grep -q -- "--last-build"'
   check "domain: y keeps an odd ending"                      bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nyr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' && [ "$(vc domain_get shop-1/shop-1)" = admin.sukungarden ]
   vc domain_set shop-1/shop-1 ""; vc domain_set prj_9 ""
   # cache: a young cache skips the refresh, a stale one runs it

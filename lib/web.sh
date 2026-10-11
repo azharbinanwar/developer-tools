@@ -8,13 +8,17 @@ stop_ui(){ # $1 pid of the wrapper -> the server runs inside it; both go, so the
 ui_serve(){ # [--no-open] -> runs until q or Ctrl-C
   local tok url pid open=yes line out
   [ "${1:-}" = --no-open ] && open=no
-  tok="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  # the same link as last time: the key is kept with the port in ui.json, so a restart lands on the open tab
+  tok="$(py -c 'import json,sys;print(json.load(open(sys.argv[1])).get("token",""))' "$HOME/.config/developer-tools/ui.json" 2>/dev/null | grep -E '^[0-9a-f]{32}$' || true)"
+  [ -n "$tok" ] || tok="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   out="$(tmpf devtools-ui)"
   step "Web page"
   # the ship-site that publishes from the page: the one next to this hub (the repo), else the installed one
   local here site_bin=""; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+  local apk_bin=""
   if [ -x "$here/ship-site/ship-site" ]; then site_bin="$here/ship-site/ship-site"; else site_bin="$(command -v ship-site || true)"; fi
-  py - "$HOME/.config" "$tok" "$site_bin" "$VERSION" "$(command -v ship-apk || true)" "${BASH_SOURCE[0]}" <<'PY' >"$out" 2>&1 &
+  if [ -x "$here/ship-apk/ship-apk" ]; then apk_bin="$here/ship-apk/ship-apk"; else apk_bin="$(command -v ship-apk || true)"; fi
+  py - "$HOME/.config" "$tok" "$site_bin" "$VERSION" "$apk_bin" "${BASH_SOURCE[0]}" <<'PY' >"$out" 2>&1 &
 @@SERVER_PY@@
 PY
   pid=$!; disown "$pid" 2>/dev/null || true   # ours to stop later; bash must not report it when we do
@@ -25,6 +29,7 @@ PY
   row "page" "${B}${A}${url}${R}"
   sub "projects, apps, domains, history, mail; open a site to publish it · this computer only · the link holds a one-time key"
   [ -n "$site_bin" ] || warn "ship-site is not installed, so the page shows everything but cannot publish"
+  [ -n "$apk_bin" ] || warn "ship-apk is not installed, so the page cannot ship an APK"
   [ "$open" = yes ] && { open_it "$url" || sub "open that link in your browser"; }
   printf "     ${D}q or Ctrl-C stops it${R}\n" >&2
   trap 'stop_ui "$pid"; printf "\n" >&2; exit 0' INT TERM
