@@ -147,7 +147,6 @@ publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
       || fail "Firebase rejected the deploy — nothing was published" "$log"
     url="https://$(vc url_get "${proj}/${site}")"; [ "$url" = "https://" ] && url="https://${site}.web.app"
     [ "$url" != "https://${site}.web.app" ] && also="https://${site}.web.app"
-    vc stat_add "${proj}/${site}"
     vc proj_set "$root" last_prod_version "$(node -p "require('$root/package.json').version||''" 2>/dev/null)"
     vc proj_set "$root" last_prod_date "$(date '+%d %b %H:%M')"
   else
@@ -156,7 +155,6 @@ publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
       || { printf '%s\n' "$out" >>"$log"; fail "Firebase rejected the preview — nothing was published" "$log"; }
     url="$(printf '%s' "$out" | py -c 'import json,sys;r=json.load(sys.stdin).get("result",{});print(next((v.get("url","") for v in r.values() if isinstance(v,dict)),""))' 2>/dev/null)"
     [ -n "$url" ] || { printf '%s\n' "$out" >>"$log"; fail "Firebase finished but returned no preview URL" "$log"; }
-    vc stat_add "${proj}/${site}"
   fi
   printf %s "$url" | clip 2>/dev/null
   step "Published"
@@ -166,11 +164,16 @@ publish_firebase(){ # $1 account $2 project/site $3 folder $4 package manager
   domain_status "$acct" "${proj}/${site}" || true
 }
 
-custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  $4 name -> saves the domain; on Firebase connects it and prints the DNS records to add
-  local host="$1" acct="$2" proj="${3%%/*}" site="${3#*/}" dom tok out t h v text=""
+custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  $4 name -> asks the domain, then domain_connect
+  local host="$1" site="${3#*/}" dom
   step "Custom domain for ${4}  ${D}$([ "$host" = firebase ] && echo "${site}.web.app" || echo "${4}.vercel.app")${R}"
   sub "a domain you own, or a subdomain of one — example.com, admin.example.com, with its ending"
   dom="$(ask "Domain" "$(vc domain_get "$3")")"; [ -n "$dom" ] || return 1
+  domain_connect "$host" "$2" "$3" "$4" "$dom" ask
+}
+
+domain_connect(){ # $1 host $2 account $3 project id $4 name $5 domain [$6 ask: offer "keep as a reminder"] -> saves it; on Firebase connects it and prints the records to add
+  local host="$1" acct="$2" proj="${3%%/*}" site="${3#*/}" dom="$5" tok out
   dom="$(printf '%s' "$dom" | tr 'A-Z' 'a-z' | sed 's|^https\{0,1\}://||; s|/.*||; s/^www\.//')"
   echo "$dom" | grep -Eq '^([a-z0-9-]+\.)+[a-z]{2,}$' || { warn "“${dom}” is not a domain — something like example.com or admin.example.com"; return 1; }
   case ".${dom##*.}." in
@@ -181,11 +184,14 @@ custom_domain(){ # $1 host  $2 account  $3 project id (Firebase: project/site)  
   [ "$DRY" = yes ] && { ok "would remember ${dom} for ${4}$([ "$host" = firebase ] && echo ", connect it and show the DNS records to add")  ${D}(dry run, nothing saved)${R}"; return 0; }
   vc domain_set "$3" "$dom"; ok "remembered ${dom} for ${4} — it shows on its row$([ "$host" = firebase ] && echo ' as waiting for DNS until it answers')"
   [ "$host" = firebase ] || { sub "add it on vercel.com › ${4} › Domains, which shows the records to add"; return 0; }
-  MENU_ITEMS=("connect it now" "just keep it as a reminder"); MENU_NOTES=("  ${D}on Firebase, then the DNS records to add at your registrar; connected already: shows them again${R}" "  ${D}connect it another time from the list: custom domain${R}")
-  [ "$(menu_pick "Firebase" 0)" = 0 ] || return 0
+  if [ "${6:-}" = ask ]; then
+    MENU_ITEMS=("connect it now" "just keep it as a reminder"); MENU_NOTES=("  ${D}on Firebase, then the DNS records to add at your registrar; connected already: shows them again${R}" "  ${D}connect it another time from the list${R}")
+    [ "$(menu_pick "Firebase" 0)" = 0 ] || return 0
+  fi
   need_firebase
   tok="$(fb_token_for "$acct")"
   [ -n "$tok" ] || { warn "no Firebase login for ${acct} on this Mac — sign in again under accounts"; return 1; }
+  step "Connecting ${dom} on Firebase"
   cmd "firebasehosting.googleapis.com … sites/${site}/customDomains/${dom}"
   out="$(vc fb_domain "$tok" "$proj" "$site" "$dom")" || { warn "${out#ERR	}"; return 1; }
   show_records "$proj" "$site" "$dom" "$out"
@@ -231,6 +237,7 @@ domain_status(){ # $1 account $2 project/site -> one line on a saved domain: liv
   dom="$(vc domain_get "$2")"; [ -n "$dom" ] || return 0
   [ "$(vc url_get "$2")" = "$dom" ] && { row "domain" "${dom}  ${G}live${R}"; return 0; }
   tok="$(fb_token_for "$acct")"; [ -n "$tok" ] || return 1
+  [ "${3:-}" = loud ] && { step "Checking ${dom} on Firebase"; cmd "firebasehosting.googleapis.com … sites/${site}/customDomains/${dom}"; }
   out="$(vc fb_records "$tok" "$proj" "$site" "$dom")" || { warn "${dom} is saved but ${out#ERR	} — custom domain › connect it now"; return 1; }
   case "${out%%	*}" in
     live) vc fb_refresh 2>/dev/null; row "domain" "${dom}  ${G}live with HTTPS${R}  ${D}the list shows it from here on${R}"; return 0 ;;

@@ -288,6 +288,9 @@ head_sha(){ [ -d "$1/.git" ] && ( cd "$1" && git rev-parse HEAD 2>/dev/null ); }
 
 pick_notes(){ # $1 root  $2 key -> echoes the "What changed" text for the mail, chosen before anything runs
   local git f
+  if [ -n "$WANT_NOTES" ]; then   # given up front: "-" means none, "git" means the commit titles, anything else is the text
+    case "$WANT_NOTES" in -) ;; git) git_notes "$1" "$2" ;; *) printf '%s' "$WANT_NOTES" ;; esac; return
+  fi
   git="$(git_notes "$1" "$2")"
   step "What changed  ${D}goes into the mail as {notes}${R}"
   if [ -n "$git" ]; then
@@ -316,8 +319,10 @@ pick_notes(){ # $1 root  $2 key -> echoes the "What changed" text for the mail, 
   esac
 }
 
+WANT_MAIL=""; WANT_NOTES=""   # --mail/--no-mail and --notes answer the Email and notes steps without asking
 mail_step(){ # $1 key  $2 name -> MAIL=yes|no: send, set up what is missing (mailbox, then this project's email), or skip
   local key="$1" name="$2" n idx
+  [ -n "$WANT_MAIL" ] && { MAIL="$WANT_MAIL"; step "Email"; row "mail" "$([ "$MAIL" = yes ] && echo "to $(recipients "$key")" || echo "none — skipped")  ${D}(from the command line)${R}"; return; }
   MAIL="$(mail_store mail_default_get "$key")"
   case "$MAIL" in false|none|no) MAIL=no ;; *) MAIL=yes ;; esac
   step "Email"

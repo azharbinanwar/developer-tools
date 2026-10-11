@@ -112,6 +112,7 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 ## Editing later
 
 - **edit an app**: To, CC, BCC, subject, app name, app id, folder, appho.st credentials, remove.
+- **history**: every build shipped for an app, newest first: date, time, version, the link, how many were mailed. Enter copies a link. Recorded from 2.2.0 on.
 - **mailbox**: the sending account, a test mail, and the mail template.
 
 Passwords show one `*` per character; Enter keeps a saved one.
@@ -126,6 +127,7 @@ The mail template is plain text in `~/.config/developer-tools/mail.json` (mailbo
 | --- | --- | --- |
 | `a` | add this app | `app.add` |
 | `e` | edit an app | `app.edit` |
+| `h` | history | `history` |
 | `m` | mailbox | `mailbox` |
 | `q` | quit | `quit` |
 | `s` | ship as | `version.keep` |
@@ -174,7 +176,7 @@ bash, python3 and curl (built in on macOS and Linux; Git Bash plus Python on Win
 
 | What | Where |
 | --- | --- |
-| Apps, credentials, who gets the mail per app, ship counts and dates, last shipped version | `~/.config/ship-apk/config.json` (mode 0600) |
+| Apps, credentials, who gets the mail per app, the ship history (last 100 per app), last shipped version | `~/.config/ship-apk/config.json` (mode 0600) |
 | The mailbox the link is sent from, and the mail templates | `~/.config/developer-tools/mail.json` (mode 0600), shared with ship-site; a 2.0 mailbox moves over on first run |
 | Build and send logs | `~/.config/ship-apk/logs/` |
 

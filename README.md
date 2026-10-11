@@ -54,7 +54,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tool
      quit
 ```
 
-**Run a tool** lists them and runs the one you pick, fetching the latest release if it is not installed. **Install or update** shows every tool ticked: press Enter for all, or untick with space first. It also installs the hub itself, so `developer-tools` works from then on. **Remove** works the same way. Or install the hub with Homebrew:
+**Run a tool** lists them and runs the one you pick, fetching the latest release if it is not installed. **Web page** opens the read-only page described below. **Install or update** shows every tool ticked: press Enter for all, or untick with space first. It also installs the hub itself, so `developer-tools` works from then on. **Remove** works the same way. Or install the hub with Homebrew:
 
 ```sh
 brew trust azharbinanwar/tap                        # once, Homebrew 7 asks this of every third-party tap
@@ -100,6 +100,16 @@ developer-tools stable install
 ### Which one?
 
 All three install the same files. Want everything: the hub. Want one tool: Homebrew or the one-liner. Each tool works on its own, the hub is a convenience.
+
+---
+
+## The web page
+
+```sh
+developer-tools ui
+```
+
+One local page over both tools: every site and app grouped by account and host, labels, your domains and whether they are live, publish counts, the full history, who gets the mail, and the mailbox. Open a site and **Publish** it from there: main or test, version keep/next/custom, notes, mail, or a dry run; the page runs `ship-site` with every answer given up front and streams its output into a terminal on the page, and a notice tells you when it is done. **Domain** connects your own domain on Firebase and shows the records to add, checks where it stands, or disconnects it. **Email** edits the people and the subject. **Settings** names the project. A site deployed without ship-site is linked by picking its folder in the Finder; *Link folder* adds a new one the same way, reading its `.firebaserc` or `.vercel/project.json`. It reads the same files the tools write, refreshes itself, and runs on this computer only: Python's built-in server on `127.0.0.1`, a random key in the link so no other page in your browser can call it, and `q` stops it. The source is `web/` (plain HTML, CSS and JS components, no framework), inlined into the single file by `./build`.
 
 ---
 

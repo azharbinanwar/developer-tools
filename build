@@ -3,6 +3,16 @@
 # The first line of a main.sh names the lib parts it needs, in order: "# needs: platform ui keys mail".
 set -euo pipefail
 cd "$(dirname "$0")"
+web_part(){ # lib/web.sh with the page (web/index.html with its stylesheet, components/*.js and app.js inlined) and web/server.py dropped into its placeholders
+  python3 - <<'PY'
+import base64, re
+html = open("web/index.html").read()
+html = re.sub(r'<link rel=stylesheet href="([^"h][^"]*)">', lambda m: "<style>\n" + open("web/" + m.group(1)).read() + "</style>", html)
+html = re.sub(r'<script src="([^"]+)"></script>', lambda m: "<script>\n" + open("web/" + m.group(1)).read() + "</script>", html)
+server = open("web/server.py").read().replace("@@PAGE_B64@@", base64.b64encode(html.encode()).decode())
+print(open("lib/web.sh").read().replace("@@SERVER_PY@@", server), end="")
+PY
+}
 build(){ # $1 tool's main.sh  $2 the built file
   local needs part
   needs="$(sed -n '1s/^# needs: //p' "$1")"
@@ -16,7 +26,8 @@ build(){ # $1 tool's main.sh  $2 the built file
     echo 'set -uo pipefail'
     for part in $needs; do
       [ -f "lib/$part.sh" ] || { echo "$1 needs lib/$part.sh, which does not exist" >&2; exit 1; }
-      echo; cat "lib/$part.sh"
+      echo
+      if [ "$part" = web ]; then web_part; else cat "lib/$part.sh"; fi
     done
     echo
     sed '1,/^$/d' "$1"                          # the rest of main.sh, after the header block

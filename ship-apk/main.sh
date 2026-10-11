@@ -9,7 +9,7 @@
 #
 # License: MIT.
 
-VERSION="2.1.0"
+VERSION="2.2.0-beta.1"
 CONF="$HOME/.config/ship-apk"
 CONFIG="$CONF/config.json"
 LOGS="$CONF/logs"
@@ -72,9 +72,16 @@ if op == "projects":   # key path app app_id people count last
         p = d["projects"][k]
         print("\x1f".join([k, p.get("path", ""), p.get("app", ""), p.get("app_id", ""), str(len(p.get("to", []))),
                            str(p.get("count", "") or ""), ago(p.get("last"))]))
-elif op == "stat_add":   # key -> one more build shipped, now
+elif op == "hist_add":   # key version link mailed -> one record per shipped build, newest last; the row count and date follow
     import time
-    p = proj(a[0]); p["count"] = p.get("count", 0) + 1; p["last"] = int(time.time()); save()
+    now = int(time.time()); p = proj(a[0])
+    h = p.setdefault("history", []); h.append({"t": now, "version": a[1], "target": "apk", "link": a[2], "mailed": int(a[3] or 0)}); del h[:-100]
+    p["count"] = p.get("count", 0) + 1; p["last"] = now; save()
+elif op == "history":    # key -> date<TAB>time<TAB>version<TAB>target<TAB>link<TAB>mailed, newest first
+    import time
+    for r in reversed(d["projects"].get(a[0], {}).get("history", [])):
+        print("%s\t%s\t%s\t%s\t%s\t%s" % (time.strftime("%d %b %Y", time.localtime(r["t"])), time.strftime("%H:%M", time.localtime(r["t"])),
+                                        r.get("version", ""), r.get("target", ""), r.get("link", ""), r.get("mailed", 0)))
 elif op == "proj_get":   print(d["projects"].get(a[0], {}).get(a[1], ""))
 elif op == "proj_set":   proj(a[0])[a[1]] = a[2]; save()
 elif op == "proj_del":   d["projects"].pop(a[0], None); save()
@@ -107,6 +114,7 @@ IFS= read -r -d '' ACTIONS <<'ACTS' || true   # a heredoc, so option texts may h
 add this app|app.add|a
 add app|app.add|a
 edit an app|app.edit|e
+history|history|h
 mailbox|mailbox|m
 quit|quit|q
 ship as|version.keep|s
@@ -425,9 +433,10 @@ ship(){ # $1 project key  $2 root -> returns 1 when the user picked quit
     MENU_ITEMS=("retry the upload" "back to apps" "quit"); MENU_NOTES=("  ${D}same APK, no rebuild${R}" "" "")
     case "$(menu_pick "Upload did not finish" 2 0)" in 1) return 0 ;; 2) return 1 ;; esac
   done
-  cfg proj_set "$key" last_version "$version"; cfg proj_set "$key" last_date "$(date '+%d %b %H:%M')"; cfg stat_add "$key"
+  cfg proj_set "$key" last_version "$version"; cfg proj_set "$key" last_date "$(date '+%d %b %H:%M')"
 
   MAIL="$want_mail"; mail_after "$key" "$name" "$version" "$UPLOAD_LINK" "$notes" "$root"; want_mail="$MAIL"
+  cfg hist_add "$key" "$version" "$UPLOAD_LINK" "${MAILED:-0}"
 
   # 4. done — what next; when no mail went out, opening the APK folder comes first
   apkdir="$(dirname "$apk")"
@@ -542,13 +551,13 @@ main(){
     else
       MENU_ITEMS+=("+ add app");       MENU_NOTES+=("  ${D}a Flutter folder, an app id, credentials${R}"); sel=$(( HERE < 0 ? 0 : HERE ))
     fi
-    MENU_ITEMS+=("edit an app" "mailbox" "quit")
-    MENU_NOTES+=("  ${D}To, CC, BCC, subject, credentials, folder, remove${R}"
+    MENU_ITEMS+=("edit an app" "history" "mailbox" "quit")
+    MENU_NOTES+=("  ${D}To, CC, BCC, subject, credentials, folder, remove${R}" "  ${D}every build shipped: when, version, link, who was mailed${R}"
                  "  ${D}$([ "$(mbox smtp_ready)" = yes ] && mbox smtp_get user || echo 'not set up yet') · shared with ship-site · template${R}" "")
     step "Apps"
     [ "$napps" -gt 0 ] || sub "no apps yet — add one to get started"
     MENU_NOKEY="$(nokey_rows "$napps")"
-    idx="$(menu_pick "Pick an app to build and upload" $(( napps + 3 )) "$sel")"; MENU_NOKEY=""   # set for that menu only; it ran in a subshell
+    idx="$(menu_pick "Pick an app to build and upload" $(( napps + 4 )) "$sel")"; MENU_NOKEY=""   # set for that menu only; it ran in a subshell
     case $(( idx - napps )) in
       0) n="$(add_app "$([ "$HERE" -lt 0 ] && printf '%s' "$ROOT")")" || continue
          [ -n "$ROOT" ] && [ "$(cfg proj_get "$n" path)" = "$ROOT" ] && { ship "$n" "$ROOT" || exit 0; } ;;
@@ -558,8 +567,14 @@ main(){
          MENU_NOKEY="$(nokey_rows "$napps")"
          idx="$(menu_pick "App" "$napps" "$(( HERE < 0 ? 0 : HERE ))")"; MENU_NOKEY=""
          [ "$idx" -lt "$napps" ] && edit_app "${PROJ_KEYS[$idx]}" ;;
-      2) [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox ;;
-      3) printf "\n" >&2; exit 0 ;;
+      2) [ "$napps" -gt 0 ] || { warn "no apps yet"; continue; }
+         load_projects "$ROOT"; MENU_ITEMS+=("← back"); MENU_NOTES+=("")
+         step "History of which app"
+         MENU_NOKEY="$(nokey_rows "$napps")"
+         idx="$(menu_pick "App" "$napps" "$(( HERE < 0 ? 0 : HERE ))")"; MENU_NOKEY=""
+         [ "$idx" -lt "$napps" ] && show_history "${PROJ_KEYS[$idx]}" "$(cfg proj_get "${PROJ_KEYS[$idx]}" app | grep . || echo "${PROJ_KEYS[$idx]}")" cfg ;;
+      3) [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox ;;
+      4) printf "\n" >&2; exit 0 ;;
       *) ship "${PROJ_KEYS[$idx]}" "${PROJ_PATHS[$idx]}" || { printf "\n" >&2; exit 0; } ;;
     esac
   done

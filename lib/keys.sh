@@ -56,7 +56,9 @@ key_hit(){ # $1 key pressed -> echoes the index of the option with that shortcut
 }
 back_hit(){ local i; for ((i=0;i<${#MK[@]};i++)); do [ "${MK[$i]}" = esc ] && { printf '%s' "$i"; return 0; }; done; return 1; }
 picked_by_key(){ [ "$(cat "$PICK_FILE" 2>/dev/null)" = key ]; }
+YES=no   # --yes: every confirmation is taken as y; set by a tool's flags, used by scripts and the web page
 confirm_y(){ # $1 question -> true only on y; used where one stray key must not do something hard to undo
+  [ "$YES" = yes ] && return 0
   local c; printf "     ${Y}%s${R} ${A}y to go, any other key cancels ›${R} " "$1" >&2
   IFS= read -rsn1 c; printf '%s\n' "$c" >&2
   [ "$c" = y ] || [ "$c" = Y ]
