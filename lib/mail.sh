@@ -10,9 +10,9 @@ py - "$MAILBOX" "$@" <<'PY'
 import json, os, sys
 path, op = sys.argv[1], sys.argv[2]
 a = sys.argv[3:]
-try: d = json.load(open(path))
-except Exception:
-    d = {}
+exec(os.environ.get("DT_LOAD", "def load_json(p):\n    import json\n    try: return json.load(open(p))\n    except Exception: return {}"))
+d = load_json(path)
+if not d:
     # a mailbox set up by ship-apk 2.0 moves over as it is, nothing to type again
     old = os.path.join(os.path.dirname(os.path.dirname(path)), "ship-apk", "config.json")
     try:
@@ -81,12 +81,15 @@ sender_name = s.get("from_name") or s["user"]
 fields = dict(name=" and ".join([", ".join(names[:-1]), names[-1]]) if len(names) > 1 else names[0],
               app=app, version=version, link=link, sender=sender_name,
               notes=("\n\nWhat changed:\n" + notes) if notes.strip() else "")
+import re
+def render(t):   # only the known placeholders are filled; anything else, a typo or a stray brace, stays as typed
+    return re.sub(r"\{(\w+)\}", lambda mm: str(fields.get(mm.group(1), mm.group(0))), t or "")
 m = EmailMessage()
-m["Subject"] = (p.get("subject") or tpl["subject"]).format(**fields)
+m["Subject"] = render(p.get("subject") or tpl["subject"])
 m["From"] = formataddr((sender_name, s.get("user", "")))
 m["To"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in to)
 if cc: m["Cc"] = ", ".join(formataddr((r.get("name", ""), r["email"].strip())) for r in cc)
-m.set_content(tpl["body"].format(**fields))
+m.set_content(render(tpl["body"]))
 
 if dry:
     print("-" * 60)
@@ -146,17 +149,18 @@ log_send(){ # project · version · link · how many were mailed
   printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M')" "$2" "$4" "$3" >> "$LOGS/$1.log"
 }
 
-smtp_test(){
+smtp_test(){ # [$1 address] -> sends the test there; asks when no address is given
   local to result
-  [ "$(mbox smtp_ready)" = yes ] || { warn "fill in address, password and host first"; return; }
-  to="$(ask "Send the test to" "$(mbox smtp_get user)")"
+  [ "$(mbox smtp_ready)" = yes ] || { warn "fill in address, password and host first"; return 1; }
+  to="${1:-$(ask "Send the test to" "$(mbox smtp_get user)")}"
   [ -n "$to" ] || return
   step "Sending test"
-  result="$(MAIL_REC="{\"to\":[{\"name\":\"you\",\"email\":\"$to\"}]}" send_mail - "developer-tools" "0.0.0" "https://github.com/azharbinanwar/developer-tools" "- this is a test")"
+  # the real template, filled with the tool itself, so the mail shows what people will get
+  result="$(MAIL_REC="{\"to\":[{\"name\":\"${to%@*}\",\"email\":\"$to\"}]}" send_mail - "developer-tools" "${VERSION:-test}" "https://github.com/azharbinanwar/developer-tools" "- a test of the mailbox from developer-tools $(date '+%d %b %H:%M'); real mails use the site or APK template with the project's own details")"
   case "$result" in
     OK*) ok "delivered — check $to (and its spam folder)" ;;
-    FAIL*) warn "$(printf '%s' "$result" | cut -f2)" ;;
-    *) warn "no recipients" ;;
+    FAIL*) warn "$(printf '%s' "$result" | cut -f2)"; return 1 ;;
+    *) warn "no recipients"; return 1 ;;
   esac
 }
 
@@ -288,6 +292,9 @@ head_sha(){ [ -d "$1/.git" ] && ( cd "$1" && git rev-parse HEAD 2>/dev/null ); }
 
 pick_notes(){ # $1 root  $2 key -> echoes the "What changed" text for the mail, chosen before anything runs
   local git f
+  if [ -n "$WANT_NOTES" ]; then   # given up front: "-" means none, "git" means the commit titles, anything else is the text
+    case "$WANT_NOTES" in -) ;; git) git_notes "$1" "$2" ;; *) printf '%s' "$WANT_NOTES" ;; esac; return
+  fi
   git="$(git_notes "$1" "$2")"
   step "What changed  ${D}goes into the mail as {notes}${R}"
   if [ -n "$git" ]; then
@@ -316,8 +323,10 @@ pick_notes(){ # $1 root  $2 key -> echoes the "What changed" text for the mail, 
   esac
 }
 
+WANT_MAIL=""; WANT_NOTES=""   # --mail/--no-mail and --notes answer the Email and notes steps without asking
 mail_step(){ # $1 key  $2 name -> MAIL=yes|no: send, set up what is missing (mailbox, then this project's email), or skip
   local key="$1" name="$2" n idx
+  [ -n "$WANT_MAIL" ] && { MAIL="$WANT_MAIL"; step "Email"; row "mail" "$([ "$MAIL" = yes ] && echo "to $(recipients "$key")" || echo "none — skipped")  ${D}(from the command line)${R}"; return; }
   MAIL="$(mail_store mail_default_get "$key")"
   case "$MAIL" in false|none|no) MAIL=no ;; *) MAIL=yes ;; esac
   step "Email"

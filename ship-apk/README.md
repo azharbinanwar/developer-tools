@@ -25,7 +25,8 @@ ship-apk              your apps; pick one, it builds, uploads and mails the link
 ship-apk --dry-run    check everything and show what would happen; changes nothing (also -n)
 ship-apk --verbose    stream the full build log instead of one line
 ship-apk config       mailbox and mail template
-ship-apk -v           version
+ship-apk --verbose    stream the full build log instead of one line (also -v)
+ship-apk -V           version · short flags combine: -nv is -n -v
 ```
 
 ## What happens
@@ -112,6 +113,7 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 ## Editing later
 
 - **edit an app**: To, CC, BCC, subject, app name, app id, folder, appho.st credentials, remove.
+- **history**: every build shipped for an app, newest first: date, time, version, the link, how many were mailed. Enter copies a link. Recorded from 2.2.0 on.
 - **mailbox**: the sending account, a test mail, and the mail template.
 
 Passwords show one `*` per character; Enter keeps a saved one.
@@ -126,6 +128,7 @@ The mail template is plain text in `~/.config/developer-tools/mail.json` (mailbo
 | --- | --- | --- |
 | `a` | add this app | `app.add` |
 | `e` | edit an app | `app.edit` |
+| `h` | history | `history` |
 | `m` | mailbox | `mailbox` |
 | `q` | quit | `quit` |
 | `s` | ship as | `version.keep` |
@@ -174,8 +177,26 @@ bash, python3 and curl (built in on macOS and Linux; Git Bash plus Python on Win
 
 | What | Where |
 | --- | --- |
-| Apps, credentials, who gets the mail per app, ship counts and dates, last shipped version | `~/.config/ship-apk/config.json` (mode 0600) |
+| Apps, credentials, who gets the mail per app, the ship history (last 100 per app), last shipped version | `~/.config/ship-apk/config.json` (mode 0600) |
 | The mailbox the link is sent from, and the mail templates | `~/.config/developer-tools/mail.json` (mode 0600), shared with ship-site; a 2.0 mailbox moves over on first run |
 | Build and send logs | `~/.config/ship-apk/logs/` |
 
 The only file it ever changes in your project is the `version:` line of `pubspec.yaml`, and only when you pick **bump**. The free appho.st tier rejects APKs over 100 MB; you are warned before the upload.
+
+## Without questions
+
+For scripts and the web page: every answer given up front, nothing asked.
+
+```sh
+ship-apk --app thoub --version=next --fresh --mail --notes git --yes
+```
+
+| Flag | Answers |
+| --- | --- |
+| `--app <key>` | which app, by the key the list and `history` show |
+| `--version=keep`, `--version=next`, `--version=1.2.0+7` | ship as is, raise the build number, or set a version |
+| `--fresh` / `--last-build` | build now, or upload the APK already in `build/` (falls back to a fresh build when there is none) |
+| `--notes <text>`, `--notes git`, `--no-notes` | what changed, for the mail |
+| `--mail` / `--no-mail` | send the link to the app's people, or not |
+| `--yes` | every confirmation taken as yes; no done screen afterwards |
+| `--dry-run` | with any of the above: checks everything, changes nothing |

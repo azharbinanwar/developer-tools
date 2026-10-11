@@ -133,3 +133,24 @@ need(){ # $1 what  $2 how to check  $3 install command -> asks, installs, or die
 }
 need_vercel(){ need "the Vercel CLI" vercel "npm i -g vercel"; }
 need_firebase(){ need "the Firebase CLI" firebase "npm i -g firebase-tools"; }
+
+show_history(){ # $1 key  $2 name  $3 store (cfg|vc) -> every publish of a project, newest first; a row copies its link
+  local key="$1" name="$2" store="$3" lines=() dt tm v tg link m idx
+  while IFS=$'\t' read -r dt tm v tg link m; do [ -n "$dt" ] && lines+=("$dt"$'\t'"$tm"$'\t'"$v"$'\t'"$tg"$'\t'"$link"$'\t'"$m"); done < <("$store" history "$key")
+  step "History  ${B}${name}${R}  ${D}${#lines[@]} publish$([ ${#lines[@]} = 1 ] || echo es)${R}"
+  [ ${#lines[@]} -gt 0 ] || { sub "nothing yet — the first publish from this version on is recorded here"; return; }
+  while :; do
+    MENU_ITEMS=(); MENU_NOTES=()
+    for l in "${lines[@]}"; do
+      IFS=$'\t' read -r dt tm v tg link m <<<"$l"
+      MENU_ITEMS+=("$(printf '%-11s %-5s  %-10s %-5s' "$dt" "$tm" "$v" "$tg")")
+      MENU_NOTES+=("  ${D}${link}$([ "${m:-0}" -gt 0 ] && echo "  · mailed to $m")${R}")
+    done
+    MENU_ITEMS+=("← back"); MENU_NOTES+=("")
+    MENU_NOKEY="$(nokey_rows "${#lines[@]}")"
+    idx="$(menu_pick "Enter copies the link" "${#lines[@]}" 0)"; MENU_NOKEY=""
+    [ "$idx" -lt ${#lines[@]} ] || return 0
+    IFS=$'\t' read -r dt tm v tg link m <<<"${lines[$idx]}"
+    printf %s "$link" | clip 2>/dev/null && ok "copied ${link}" || sub "$link"
+  done
+}

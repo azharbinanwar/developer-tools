@@ -54,7 +54,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/azharbinanwar/developer-tool
      quit
 ```
 
-**Run a tool** lists them and runs the one you pick, fetching the latest release if it is not installed. **Install or update** shows every tool ticked: press Enter for all, or untick with space first. It also installs the hub itself, so `developer-tools` works from then on. **Remove** works the same way. Or install the hub with Homebrew:
+**Run a tool** lists them and runs the one you pick, fetching the latest release if it is not installed. **Web page** opens the read-only page described below. **Install or update** shows every tool ticked: press Enter for all, or untick with space first. It also installs the hub itself, so `developer-tools` works from then on. **Remove** works the same way. Or install the hub with Homebrew:
 
 ```sh
 brew trust azharbinanwar/tap                        # once, Homebrew 7 asks this of every third-party tap
@@ -95,11 +95,21 @@ From then on `developer-tools install` keeps you on the newest beta. Back to sta
 developer-tools stable install
 ```
 
-`ship-site -v` shows a beta as `2.1.0-beta.1`. The tools are the same files on both channels; only which release you get differs.
+`ship-site -V` shows a beta as `2.1.0-beta.1`. The tools are the same files on both channels; only which release you get differs.
 
 ### Which one?
 
 All three install the same files. Want everything: the hub. Want one tool: Homebrew or the one-liner. Each tool works on its own, the hub is a convenience.
+
+---
+
+## The web page
+
+```sh
+developer-tools ui
+```
+
+One local page over both tools: every site and app grouped by account and host, labels, your domains and whether they are live, publish counts, the full history, who gets the mail, and the mailbox. Open a site and **Publish** it from there: main or test, version keep/next/custom, notes, mail, or a dry run; the page runs `ship-site` with every answer given up front and streams its output into a terminal on the page, and a notice tells you when it is done. **Domain** connects your own domain on Firebase and shows the records to add, checks where it stands, or disconnects it. **Email** edits the people and the subject. **Settings** names the project and its folder. **Mailbox** edits the sending account, sends a test mail, and edits the two templates with a live preview. **Accounts** adds a Vercel account (browser sign-in or a token) or a Firebase one (Google sign-in in the browser), gives each a label, and removes or signs out. **Releases** shows what is installed against the newest release on your channel, switches between stable and beta, installs or updates everything with one password, and lists every release on GitHub with its notes, any of which can be installed. A site deployed without ship-site is linked by picking its folder in the Finder; *Add site* adds a new one the same way, reading its `.firebaserc` or `.vercel/project.json`; *Add app* adds a Flutter project from its folder. Apps ship from the page too, through `ship-apk` with its answers given up front. Every run's log is kept under `~/.config/developer-tools/runs/` and listed on the project's History tab, so a reload or a restart never loses one. It reads the same files the tools write, refreshes itself, and runs on this computer only: Python's built-in server on `127.0.0.1`, a random key in the link so no other page in your browser can call it, and `q` stops it. The source is `web/` (plain HTML, CSS and JS components, no framework), inlined into the single file by `./build`.
 
 ---
 

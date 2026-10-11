@@ -29,6 +29,7 @@ for f in ship-apk/ship-apk ship-site/ship-site developer-tools; do
 done
 for f in ship-apk/ship-apk ship-site/ship-site; do check "-n is listed in --help $f" bash -c "bash $f --help 2>&1 | grep -q -- '(also -n)'"; done
 check "refuses piped stdin" bash -c 'bash ship-apk/ship-apk </dev/null 2>&1 | grep -q "needs a terminal"'
+check "hub: ui is a command"                 bash -c 'bash developer-tools --help 2>&1 | grep -q "developer-tools ui"'
 check "hub rejects an unknown tool" bash -c 'bash developer-tools nope 2>&1 | grep -q "no tool called"'
 
 export HOME; HOME="$(mktemp -d)"; trap 'rm -rf "$HOME"' EXIT
@@ -100,8 +101,13 @@ ANS
   cfg proj_set empty app E
   check "mail: no recipients → NO_RECIPIENTS" is "$(send_mail empty E 1 l n yes)" NO_RECIPIENTS
   cfg proj_del demo; cfg proj_del empty
-  cfg proj_set stat path /tmp/stat; cfg stat_add stat; cfg stat_add stat; cfg stat_add stat
+  cfg proj_set stat path /tmp/stat; cfg hist_add stat 1.0.0+1 https://a/1 0; cfg hist_add stat 1.0.0+2 https://a/2 3; cfg hist_add stat 1.0.0+3 https://a/3 0
   check "stats: count and last date on the app row" is "$(cfg projects | grep '^stat' | cut -d$'\x1f' -f6,7 | tr $'\x1f' ' ')" "3 today"
+  check "history: newest first with version, link, mailed" is "$(cfg history stat | head -1 | cut -f3-6 | tr '\t' ' ')" "1.0.0+3 apk https://a/3 0"
+  check "history: who was mailed is kept"            grep -q $'1.0.0+2\tapk\thttps://a/2\t3' <<<"$(cfg history stat)"
+  out="$(bash -c 'source ./ship-apk/ship-apk; show_history stat "Stat" cfg < <(printf "\e")' 2>&1)"
+  check "history screen: rows with the link"         grep -q "https://a/2" <<<"$out"
+  check "history screen: counts the publishes"       grep -q "3 publishes" <<<"$out"
   cfg proj_del stat
   check "cfg: delete"                         is "$(cfg projects)" ""
 
@@ -312,8 +318,10 @@ echo "── ship-site"
   check "vc: bad token exits non-zero"        not vc user not-a-token
   vc cache_add me prj_9 site-a site-a.vercel.app; vc proj_set /tmp/site-a id prj_9
   check "landing: cached row with its folder" is "$(vc landing)" $'me\x1fprj_9\x1fsite-a\x1fsite-a.vercel.app\x1f/tmp/site-a\x1fvercel\x1f\x1f\x1f\x1f\x1f\x1f'
-  vc stat_add prj_9; vc stat_add prj_9
+  vc hist_add prj_9 1.0.0 main https://site-a.vercel.app me 0; vc hist_add prj_9 1.0.1 test https://x.vercel.app me 2
   check "stats: count and last date on the row" is "$(vc landing | cut -d$'\x1f' -f9,10 | tr $'\x1f' ' ')" "2 today"
+  check "history: site record, newest first"    is "$(vc history prj_9 | head -1 | cut -f3-6 | tr '\t' ' ')" "1.0.1 test https://x.vercel.app 2"
+  check "history: empty for an unknown project" is "$(vc history nothing)" ""
   check "stats: stat_get"                       is "$(vc stat_get prj_9 | tr '\t' ' ')" "2 today"
   check "stats: none is blank"                  is "$(vc stat_get nothing | tr '\t' ' ')" "0 "
   check "url_get: the cached url"               is "$(vc url_get prj_9)" site-a.vercel.app
@@ -618,6 +626,100 @@ FAKE
   vc person_del shop-1/shop-1 sam@example.com; vc person_del shop-1/shop-1 qa@example.com bcc
   out="$(bash -c 'source ./ship-site/ship-site; mail_step shop-1/shop-1 Shop < <(printf "x"); echo "mail=$MAIL"' 2>&1)"
   check "site mail: nobody yet offers the project's email"   grep -q "set up this project's email" <<<"$out"
+  vc acct_set ui_me scope ui; vc cache_add ui_me prj_ui ui-site ui-site.vercel.app; vc label_set prj_ui mine; vc hist_add prj_ui 1.0.0 main https://ui-site.vercel.app ui_me 2
+  uiout="$(mktemp)"; ( PATH="$fbin2:$PATH" bash -c 'source ./developer-tools; ui_serve --no-open' </dev/null >"$uiout" 2>&1 & ); for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q 'http://127.0.0.1' "$uiout" && break; sleep 0.3; done
+  uiurl="$(sed -n 's/.*\(http:\/\/127.0.0.1:[0-9]*\/?t=[0-9a-f]*\).*/\1/p' "$uiout" | head -1)"
+  check "ui: prints a local link with a key"                 grep -q '127.0.0.1:[0-9]*/?t=[0-9a-f]\{32\}' <<<"$uiurl"
+  check "ui: the page is served"                             bash -c 'curl -s "$1" | grep -q "<title>developer-tools</title>"' _ "$uiurl"
+  check "ui: a wrong key is refused"                         is "$(curl -s -o /dev/null -w '%{http_code}' "${uiurl%t=*}t=nope")" 403
+  check "ui: no key is refused"                              is "$(curl -s -o /dev/null -w '%{http_code}' "${uiurl%%/?t=*}/api/data")" 403
+  uidata="$(curl -s "${uiurl/\/?t=//api/data?t=}")"
+  check "ui: data lists the site with label and history"     bash -c 'python3 -c "import json,sys; d=json.load(sys.stdin); s=[x for x in d[\"sites\"] if x[\"id\"]==\"prj_ui\"][0]; assert s[\"label\"]==\"mine\" and s[\"host\"]==\"vercel\" and s[\"count\"]==1 and s[\"history\"][0][\"mailed\"]==2; print(\"ok\")" <<<"$1"' _ "$uidata"
+  check "ui: mailbox is reported with its account"           bash -c 'python3 -c "import json,sys; d=json.load(sys.stdin); assert d[\"mailbox\"][\"user\"]==\"me@gmail.com\"; print(\"ok\")" <<<"$1"' _ "$uidata"
+  check "ui: apps come along"                                bash -c 'python3 -c "import json,sys; d=json.load(sys.stdin); assert isinstance(d[\"apps\"], list); print(\"ok\")" <<<"$1"' _ "$uidata"
+  # publishing from the page: the server runs ship-site with every answer given up front; here as a dry run against the fakes
+  PATH="$fbin2:$PATH" vc fb_refresh 2>/dev/null; vc cache_add a@x.com shop-1/shop-1 shop-1 shop-1.web.app firebase shop-1; vc stamp   # shop-1 back in the list
+  uirun="$(curl -s -X POST --data '{"id":"shop-1/shop-1","folder":"'"$p"'","target":"test","version":"keep","notes":"-","mail":false,"dry":true}' "${uiurl/\/?t=//api/deploy?t=}")"
+  check "ui publish: a run id comes back"                     grep -q '"run"' <<<"$uirun"
+  check "ui publish: the command is shown"                    grep -q -- '--project shop-1/shop-1 --preview --version=keep --notes - --no-mail --yes --dry-run' <<<"$uirun"
+  uirid="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["run"])' <<<"$uirun")"
+  for _ in $(seq 1 60); do uist="$(curl -s "${uiurl/\/?t=//api/run?t=}&id=$uirid")"; grep -q '"done": true' <<<"$uist" && break; sleep 0.5; done
+  check "ui publish: the run finishes"                        grep -q '"done": true' <<<"$uist"
+  check "ui publish: its output is streamed back"             grep -q "dry run passed" <<<"$uist"
+  check "ui publish: a bad request is refused"                grep -q '"error"' <<<"$(curl -s -X POST --data '{"id":"","target":"nope"}' "${uiurl/\/?t=//api/deploy?t=}")"
+  uip="$(curl -s -X POST --data '{"kind":"site","id":"shop-1/shop-1","op":"add","role":"cc","email":"page@example.com","name":"Page"}' "${uiurl/\/?t=//api/people?t=}")"
+  check "ui people: a recipient is added from the page"       grep -q '"ok"' <<<"$uip"
+  check "ui people: it lands in the tool's own store"         is "$(vc people shop-1/shop-1 cc)" $'Page\tpage@example.com'
+  check "ui people: a bad address is refused"                 grep -q '"error"' <<<"$(curl -s -X POST --data '{"kind":"site","id":"shop-1/shop-1","op":"add","role":"to","email":"nope"}' "${uiurl/\/?t=//api/people?t=}")"
+  curl -s -X POST --data '{"kind":"site","id":"shop-1/shop-1","op":"subject","subject":"{app} is up"}' "${uiurl/\/?t=//api/people?t=}" >/dev/null
+  check "ui people: subject saved"                            is "$(vc subject_get shop-1/shop-1)" "{app} is up"
+  curl -s -X POST --data '{"kind":"site","id":"shop-1/shop-1","op":"remove","role":"cc","email":"page@example.com"}' "${uiurl/\/?t=//api/people?t=}" >/dev/null
+  check "ui people: removed again"                            is "$(vc people shop-1/shop-1 cc)" ""
+  uid="$(curl -s -X POST --data '{"id":"prj_ui","op":"save","domain":"Shop.Example.com"}' "${uiurl/\/?t=//api/domain?t=}")"
+  check "ui domain: a Vercel domain is kept as a reminder"    grep -q '"reminder"' <<<"$uid"
+  check "ui domain: saved in ship-site's store"               is "$(vc domain_get prj_ui)" shop.example.com
+  check "ui domain: a bad one is refused"                     grep -q '"error"' <<<"$(curl -s -X POST --data '{"id":"prj_ui","op":"save","domain":"nope"}' "${uiurl/\/?t=//api/domain?t=}")"
+  curl -s -X POST --data '{"id":"prj_ui","op":"remove"}' "${uiurl/\/?t=//api/domain?t=}" >/dev/null
+  check "ui domain: removed again"                            is "$(vc domain_get prj_ui)" ""
+  curl -s -X POST --data '{"id":"prj_ui","label":"Landing"}' "${uiurl/\/?t=//api/label?t=}" >/dev/null
+  check "ui label: saved into ship-site's store"             is "$(vc label_get prj_ui)" Landing
+  curl -s -X POST --data '{"id":"prj_ui","label":""}' "${uiurl/\/?t=//api/label?t=}" >/dev/null
+  check "ui label: blank removes it"                         is "$(vc label_get prj_ui)" ""
+  check "ui app: unknown app is refused"                      grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"nope","app_id":"x"}' "${uiurl/\/?t=//api/app?t=}")"
+  check "ui mailbox: a bad address is refused"                grep -q '"error"' <<<"$(curl -s -X POST --data '{"op":"account","user":"nope","host":"smtp.x.com","port":"465"}' "${uiurl/\/?t=//api/mailbox?t=}")"
+  check "ui mailbox: an unknown placeholder saves with a note" grep -q 'stays as typed' <<<"$(curl -s -X POST --data '{"op":"template","kind":"site","subject":"{app} {verison}","body":"x {link}"}' "${uiurl/\/?t=//api/mailbox?t=}")"
+  curl -s -X POST --data '{"op":"template","kind":"site","subject":"{app} {version} is live","body":"Hi {name},\n\n{link}{notes}\n\n{sender}"}' "${uiurl/\/?t=//api/mailbox?t=}" >/dev/null
+  check "ui mail test: a bad address is refused"              grep -q '"error"' <<<"$(curl -s -X POST --data '{"to":"nope"}' "${uiurl/\/?t=//api/mail_test?t=}")"
+  check "ui channel: a bad channel is refused"                grep -q '"error"' <<<"$(curl -s -X POST --data '{"channel":"nope"}' "${uiurl/\/?t=//api/channel?t=}")"
+  check "hub versions: one line per tool plus channel and latest" bash -c 'bash developer-tools versions 2>/dev/null | grep -c "^ship-site\|^ship-apk\|^developer-tools\|^channel\|^latest" | grep -qx 5'
+  check "ui accounts: a bad request is refused"               grep -q '"error"' <<<"$(curl -s -X POST --data '{"op":"nope","host":"vercel"}' "${uiurl/\/?t=//api/accounts?t=}")"
+  check "ui ship: a bad request is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"","fresh":true}' "${uiurl/\/?t=//api/ship?t=}")"
+  check "ui ship: a bad version is refused"                   grep -q '"error"' <<<"$(curl -s -X POST --data '{"key":"x","version":"nope"}' "${uiurl/\/?t=//api/ship?t=}")"
+  check "ui domain run: a bad request is refused"             grep -q '"error"' <<<"$(curl -s -X POST --data '{"id":"prj_ui","op":"connect","domain":"nope"}' "${uiurl/\/?t=//api/domain_run?t=}")"
+  check "ui link: unlink forgets the folder"                  bash -c 'curl -s -X POST --data "{\"id\":\"shop-1/shop-1\",\"op\":\"unlink\"}" "$1" | grep -q "\"ok\"" && [ -z "$(vc folder_of shop-1/shop-1)" ]' _ "${uiurl/\/?t=//api/link?t=}"
+  vc proj_set "$p" id shop-1/shop-1; vc proj_set "$p" account ui_me; vc proj_set "$p" name shop-1; vc proj_set "$p" host firebase
+  check "ui link: unknown project is refused"                 grep -q '"error"' <<<"$(curl -s -X POST --data '{"id":"nope","op":"unlink"}' "${uiurl/\/?t=//api/link?t=}")"
+  check "ui publish: no key, no run"                          is "$(curl -s -o /dev/null -w '%{http_code}' -X POST --data '{}' "${uiurl%%/?t=*}/api/deploy")" 403
+  uiport="${uiurl#http://127.0.0.1:}"; uiport="${uiport%%/*}"; [ -n "$uiport" ] && lsof -nP -iTCP:"$uiport" -sTCP:LISTEN -t 2>/dev/null | xargs kill 2>/dev/null || true
+  vc acct_del ui_me
+  # the same without the page: every answer on the command line, no terminal
+  out="$(PATH="$fbin2:$PATH" bash ship-site/ship-site --project shop-1/shop-1 --preview --dry-run --no-mail --yes "$p" </dev/null 2>&1 || true)"
+  check "flags: a dry run with no terminal and no questions"  grep -q "dry run passed" <<<"$out"
+  check "flags: --no-mail answers the Email step"             grep -q "none — skipped" <<<"$out"
+  out="$(PATH="$fbin2:$PATH" bash ship-site/ship-site --project shop-1/shop-1 --prod --version=next --dry-run --no-mail --yes "$p" </dev/null 2>&1 || true)"
+  check "flags: --version=next bumps the patch"               grep -q "would become version" <<<"$out"
+  out="$(bash ship-site/ship-site --project nope --preview --dry-run --yes "$p" </dev/null 2>&1 || true)"
+  check "flags: an unknown project id is explained"           grep -q "no project with id" <<<"$out"
+  out="$(PATH="$fbin2:$PATH" bash ship-site/ship-site --project shop-1/shop-1 --preview --no-mail -ny "$p" </dev/null 2>&1 || true)"
+  check "flags: short flags combine (-ny)"                    grep -q "dry run passed" <<<"$out"
+  out="$(bash ship-site/ship-site accounts add vercel --nope </dev/null 2>&1 || true)"
+  check "accounts flags: an unknown flag is explained"        grep -q "accounts add vercel \[name\]" <<<"$out"
+  out="$(bash ship-site/ship-site accounts remove vercel nobody </dev/null 2>&1 || true)"
+  check "accounts flags: removing an unknown account is explained" grep -q "no Vercel account" <<<"$out"
+  vc acct_set ren_a org_id o1; vc acct_set ren_a scope me
+  check "accounts: rename sets a label, the id stays"        bash -c 'source ./ship-site/ship-site; bash ship-site/ship-site accounts rename vercel ren_a "My team" </dev/null >/dev/null 2>&1 && [ "$(vc acct_label vercel ren_a)" = "My team" ] && [ "$(vc acct_get ren_a scope)" = me ]'
+  vc acct_del ren_a; vc acct_label vercel ren_a ""
+  check "flags: -V prints the version"                        bash -c 'bash ship-site/ship-site -V | grep -q "^ship-site " && bash ship-apk/ship-apk -V | grep -q "^ship-apk " && bash developer-tools -V | grep -q "^developer-tools "'
+  out="$(bash ship-site/ship-site --project shop-1/shop-1 --domain admin.shop.com --dry-run --yes </dev/null 2>&1 || true)"
+  check "flags: --domain connects a domain, no publish"       grep -q "would remember admin.shop.com" <<<"$out"
+  out="$(bash ship-site/ship-site --project shop-1/shop-1 --domain-check --yes </dev/null 2>&1 || true)"
+  check "flags: --domain-check with no domain says so"        grep -q "no domain saved" <<<"$out"
+  out="$(bash ship-apk/ship-apk --app nope --fresh --no-mail --yes </dev/null 2>&1 || true)"
+  check "apk flags: an unknown app key is explained"          grep -q "no app with key" <<<"$out"
+  fa="$(mktemp -d)"; printf 'name: flagapp\nversion: 1.0.0+1\n' > "$fa/pubspec.yaml"
+  bash -c 'source ./ship-apk/ship-apk; cfg proj_set flagapp path "$1"; cfg proj_set flagapp app FlagApp; cfg proj_set flagapp app_id A1; cfg proj_set flagapp user_id U1; cfg proj_set flagapp key K1' _ "$fa"
+  out="$(bash ship-apk/ship-apk --app flagapp --no-mail --yes </dev/null 2>&1 || true)"
+  check "apk flags: --app needs --fresh or --last-build"      grep -q "say --fresh or --last-build" <<<"$out"
+  out="$(bash ship-apk/ship-apk --app flagapp --last-build --version=next --no-mail --yes --dry-run </dev/null 2>&1 || true)"
+  check "apk flags: a dry run with no terminal and no questions" grep -q "Dry run · would run" <<<"$out"
+  check "apk flags: --version=next raises the build number"   grep -q "1.0.0+2" <<<"$out"
+  check "apk flags: --no-mail answers the Email step"         grep -q "none — skipped" <<<"$out"
+  fakefl="$(mktemp -d)"; printf '#!/bin/bash\necho "no target lib/main.dart" >&2; exit 1\n' > "$fakefl/flutter"; chmod +x "$fakefl/flutter"
+  rc=0; PATH="$fakefl:$PATH" bash ship-apk/ship-apk --app flagapp --fresh --no-mail --yes </dev/null >/dev/null 2>&1 || rc=$?
+  check "apk flags: a failed build exits non-zero"            [ "$rc" -ne 0 ]
+  rm -rf "$fakefl"
+  bash -c 'source ./ship-apk/ship-apk; cfg proj_del flagapp' 2>/dev/null || true; rm -rf "$fa"
+  check "apk flags: listed in --help"                         bash -c 'bash ship-apk/ship-apk --help 2>&1 | grep -q -- "--last-build"'
   check "domain: y keeps an odd ending"                      bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nyr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' && [ "$(vc domain_get shop-1/shop-1)" = admin.sukungarden ]
   vc domain_set shop-1/shop-1 ""; vc domain_set prj_9 ""
   # cache: a young cache skips the refresh, a stale one runs it

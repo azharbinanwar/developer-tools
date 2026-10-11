@@ -6,7 +6,7 @@ Bug reports and fixes are welcome. A few rules keep the one-liners working.
 
 - **One file per tool.** `bash <(curl …)` only works because each tool is a single script. No helper files, no imports, no `lib/`.
 - **No dependencies beyond what the tool drives.** bash 3.2+, python3 and curl, plus flutter for ship-apk, node and the Vercel or Firebase CLI for ship-site. If you need something else, the script asks the user before installing it, never silently.
-- **Stay portable.** macOS, Linux and Windows (Git Bash or WSL) all run these. Anything that differs between them goes through the platform helpers in `lib/platform.sh` (`clip`, `open_it`, `edit_file`, `fsize`, `fmtime`, `fmode`, `fdate`, `sed_i`, `tmpf`, `tmpd`, `py`); never call `pbcopy`, `open`, `stat -f`, `sed -i ''` or `mktemp -t` directly. CI runs the suite on macOS and Linux.
+- **Stay portable.** macOS, Linux and Windows (Git Bash or WSL) all run these. Anything that differs between them goes through the platform helpers in `lib/platform.sh` (`clip`, `open_it`, `edit_file`, `fsize`, `fmtime`, `fmode`, `fdate`, `sed_i`, `tmpf`, `tmpd`, `py`); never call `pbcopy`, `open`, `stat -f`, `sed -i ''` or `mktemp -t` directly. CI runs the suite on macOS and Linux. · DT_LOAD: the JSON loader every store runs, which repairs or backs up a broken file
 - **Settings go in `~/.config/<tool>/`**, never next to the script and never in the user's project.
 - **Ask before anything irreversible.** Uploads, emails, production deploys and installs all confirm first unless a flag like `--prod` says otherwise.
 - **Short over clever.** If a feature can be covered by the thing we drive (the Vercel dashboard, Finder, an editor), leave it out and say so in the README.
@@ -20,6 +20,11 @@ lib/keys.sh                 the shortcut-key engine and keys.json overrides
 lib/mail.sh                 mailbox setup, recipients, template, SMTP send
 lib/firebase.sh             Firebase Hosting: CLI logins, sites, deploys, custom domains
 lib/vercel.sh               Vercel: accounts, projects, deploys
+lib/web.sh                  developer-tools ui: starts the page server and stops it on q
+web/server.py               the page server (Python stdlib): /api/data, deploy, people, domain, label
+web/index.html              the page; web/style.css its tokens and component styles
+web/components/*.js         the generic components: Icon, AppButton, AppTile/AppTileGroup, AppTextField, AppChip, AppSwitch, AppToggle, AppNotice, StateView, PulseDot, toast, Terminal + followRun
+web/app.js                  the views, built from those components on the tools' own data
 ship-apk/main.sh            the ship-apk flow; its first line names the lib parts it needs
 ship-site/main.sh           the ship-site flow
 hub/main.sh                 the hub: menu to run, install, update or remove tools

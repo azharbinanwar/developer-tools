@@ -28,8 +28,30 @@ ship-site --dry-run    check everything and show what would happen; changes noth
 ship-site ~/site       treat that folder as the current project
 ship-site accounts     add or remove Vercel and Firebase accounts
 ship-site mailbox      the account the link is mailed from, shared with ship-apk
-ship-site -v           version
+ship-site -V           version · short flags combine: -ny is -n -y
 ```
+
+### Without questions
+
+Every answer can be given up front, for scripts, CI and the web page; with all of them there is no menu and no terminal needed:
+
+```sh
+ship-site --project sukun-garden/admin-sukun-garden --prod --version=next --notes git --mail --yes ~/Code/admin
+```
+
+| Flag | Answers |
+| --- | --- |
+| `--project <id>` | which project: a Vercel project id, or Firebase `<project>/<site>`, as `history` and the web page show them |
+| `--prod` / `--preview` | main website or test version |
+| `--version=keep`, `--version=next`, `--version=1.2.3` | publish as is, bump the patch, or set a version |
+| `--notes <text>`, `--notes git`, `--no-notes` | what changed, for the mail |
+| `--mail` / `--no-mail` | send the link to the project's people, or not |
+| `--yes` | every confirmation taken as yes; no done screen afterwards |
+| `--domain <name>` | with `--project`: connect your own domain to that site and print the records to add; no publish |
+| `--domain-check` | with `--project`: where its domain stands — waiting for DNS, up on http, or live |
+| `accounts add vercel [--token] [--team <slug>]`, `accounts add firebase` | add an account without the menu: browser sign-in, or a token in `VERCEL_TOKEN` |
+| `accounts rename vercel\|firebase <id> <label>`, `accounts remove vercel <id>`, `accounts remove firebase <email>` | the label an account shows under; remove or sign out |
+| a folder | the one to build; otherwise the folder the project was last published from |
 
 ## What happens
 
@@ -63,6 +85,7 @@ For Firebase, nothing has to be set up in your repo: no `firebase init`, no `fir
 
 - **+ new project**: a Vercel project, or a Firebase site — inside one of your existing Firebase projects (`<name>.web.app`), or in a brand-new Firebase project made from just a name (free plan, Hosting only, no billing). The name you type is cleaned to what the host allows (`Admin.Sukun Garden` → `admin-sukun-garden`) and shown back as **create admin-sukun-garden.web.app** before anything is made; **change the name** asks again. With no account on that host yet, it signs you in first. It asks which account only when you have more than one. One Firebase project can hold several sites on the free plan: a landing page on `sukun-garden.web.app` and the admin on `sukun-garden-admin.web.app`, say.
 - **label a project**: your own name for it: `admin`, `landing`, the domain it serves. Shown in the list and when publishing; it changes nothing on Vercel or Firebase. It is never asked in the flow: set it from the list, or after publishing on the done screen, where one is suggested from the folder name (`SukunGardenAdmin` → `admin`).
+- **history**: every publish of a project, newest first: date, time, version, main or test, the link, how many were mailed. Enter copies a link. Recorded from 2.2.0 on; the count and date on each row come from it.
 - **custom domain**: your own domain or subdomain (`example.com`, `admin.example.com`, with its ending) for a project, saved at once as a reminder and shown on its row. On Firebase you can also **connect it now**: it prints the DNS records the way a registrar wants them (host `admin`, or `@` for the domain itself) and copies them. Three states follow, read from Firebase on every refresh and after every publish: **waiting for DNS** (Firebase has not seen the records yet; the line says which), **up on http, HTTPS soon** (DNS is through, the site already answers on the domain, the certificate is being issued, nothing to do), then live, when the row shows the domain in place of `<site>.web.app` and the published link uses it. The done screen gets **check the domain again** until then; the full table comes back from **custom domain › connect it now** any time. The `.web.app` address keeps working either way. Or **just keep it as a reminder** and connect it another time. Vercel domains are added on vercel.com, which shows its records there; the reminder is kept here all the same.
 - **accounts**: add or remove Vercel accounts (browser sign-in or a pasted token, then the team scope) and Firebase accounts (Google sign-in in the browser). With no account yet, it starts by adding one.
 
@@ -181,6 +204,7 @@ It ends with **dry run passed** or a list of ✗ problems to fix.
 | `n` | new project | `project.new` |
 | `l` | label a project | `project.label` |
 | `d` | custom domain | `project.domain` |
+| `h` | history | `history` |
 | `m` | mailbox | `mailbox` |
 | `e` | email for this project (after publishing) | `project.mail` |
 | `s` | send the link | `mail.send` |
@@ -230,7 +254,7 @@ bash, python3 and node on macOS, Linux or Windows (Git Bash or WSL), plus the CL
 
 | What | Where |
 | --- | --- |
-| Accounts, scopes, project list, labels, which project each folder uses, publish counts and dates, last published version, who gets the mail per project | `~/.config/ship-site/config.json` (mode 0600) |
+| Accounts, scopes, project list, labels, which project each folder uses, the publish history (last 100 per project), last published version, who gets the mail per project | `~/.config/ship-site/config.json` (mode 0600) |
 | The mailbox the link is sent from, and the mail templates | `~/.config/developer-tools/mail.json` (mode 0600), shared with ship-apk |
 | Send logs | `~/.config/ship-site/logs/` |
 | Each Vercel account's sign-in | `~/.config/ship-site/accounts/<name>/` (mode 0700) |
