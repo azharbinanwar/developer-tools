@@ -22,6 +22,18 @@ newest_tag(){ # -> the newest release tag, pre-releases included; empty when Git
   curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" 2>/dev/null | py -c 'import json,sys
 r = json.load(sys.stdin); print(r[0]["tag_name"] if r else "")' 2>/dev/null || true   # unreachable → empty, never an error
 }
+latest_tag(){ # -> the newest release tag on the current channel: the stable "latest", or the newest of all on beta; empty offline
+  if [ "$(channel)" = beta ]; then newest_tag
+  else curl -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n 's|.*/tag/||p'; fi
+}
+versions(){ # -> one line per tool: name<TAB>installed version (or -), then channel and latest; what the web page's Updates view shows
+  local t v
+  for t in "${TOOLS[@]}" developer-tools; do
+    v=""; command -v "$t" >/dev/null 2>&1 && v="$("$t" --version 2>/dev/null | awk '{print $2}')"
+    printf '%s\t%s\n' "$t" "${v:--}"
+  done
+  printf 'channel\t%s\nlatest\t%s\n' "$(channel)" "$(latest_tag | sed 's/^v//')"
+}
 resolve_base(){ # -> BASE for this run: the stable latest, or the newest tag on the beta channel
   [ -n "${DEVTOOLS_BASE:-}" ] && { BASE="$DEVTOOLS_BASE"; return; }   # DEVTOOLS_BASE=file:///dir to test locally
   BASE="https://github.com/$REPO/releases/latest/download"
@@ -101,21 +113,33 @@ status(){ # $1 tool -> "installed 2.0.0-beta.1 (beta)" or "not installed"
 }
 label(){ printf '%-11s %-56s %s' "${TOOLS[$1]}" "${NOTES[$1]}" "$(status "${TOOLS[$1]}")"; }
 
-install_tool(){ # $1 tool -> downloads the latest release into BIN
+as_admin(){ # runs a command line with the rights BIN needs: plain when writable, sudo in a terminal, the macOS password dialog when there is none (the web page)
+  local line; line="$(printf '%q ' "$@" | sed 's/ \\&\\& / \&\& /g')"
+  if [ -z "$SUDO" ]; then eval "$line"
+  elif [ -t 0 ]; then eval "sudo $line"
+  elif [ "$OS" = mac ]; then
+    sub "macOS asks for your password in a dialog"
+    osascript -e "do shell script \"$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')\" with administrator privileges" >/dev/null
+  else die "writing to $BIN needs sudo, which needs a terminal — run: sudo developer-tools install"; fi
+}
+fetch_tool(){ # $1 tool -> downloads and checks the latest release; echoes the temp file
   local t="$1" tmp
   tmp="$(tmpf "$t")"
   curl -fsSL "$BASE/$t" -o "$tmp" || { rm -f "$tmp"; die "could not download $t — is there a release yet?"; }
   bash -n "$tmp" || { rm -f "$tmp"; die "$t downloaded broken, not installing it"; }
-  $SUDO mkdir -p "$BIN" && $SUDO install -m 755 "$tmp" "$BIN/$t" || { rm -f "$tmp"; die "could not write $BIN/$t"; }
-  rm -f "$tmp"
-  ok "$t $("$BIN/$t" --version 2>/dev/null | awk '{print $2}')  ${D}→ $BIN/$t${R}"
+  printf '%s' "$tmp"
 }
-install_picked(){ # $@ indexes
-  local i
+install_picked(){ # $@ indexes -> downloads every tool first, then one privileged step puts them all in place: one password, once
+  local i t tmp names=() files=() line=()
   [ $# -gt 0 ] || { printf "     ${D}nothing ticked, nothing installed${R}\n" >&2; return; }
   step "Installing to $BIN$([ -n "$SUDO" ] && printf "  ${D}(asks for your password once)${R}")"
-  for i in "$@"; do install_tool "${TOOLS[$i]}"; done
-  install_tool developer-tools   # the hub itself, so `developer-tools` works next time
+  for i in "$@"; do names+=("${TOOLS[$i]}"); done
+  names+=(developer-tools)   # the hub itself, so `developer-tools` works next time
+  for t in "${names[@]}"; do files+=("$(fetch_tool "$t")"); done
+  line=(mkdir -p "$BIN"); for i in "${!names[@]}"; do line+=("&&" install -m 755 "${files[$i]}" "$BIN/${names[$i]}"); done
+  as_admin "${line[@]}" || { rm -f "${files[@]}"; die "could not write to $BIN"; }
+  rm -f "${files[@]}"
+  for t in "${names[@]}"; do ok "$t $("$BIN/$t" --version 2>/dev/null | awk '{print $2}')  ${D}→ $BIN/$t${R}"; done
   case ":$PATH:" in *":$BIN:"*) ;; *) printf "     ${Y}!${R} add %s to your PATH to run them by name\n" "$BIN" >&2 ;; esac
 }
 run_tool(){ # $1 tool -> installed copy if any, otherwise the latest release from GitHub
@@ -135,7 +159,8 @@ main(){
       printf "    ${A}developer-tools stable install${R} back to the stable release\n"
       printf "    ${A}developer-tools <tool>${R}       run one tool (ship-apk, ship-site)\n"
       printf "    ${A}developer-tools ui${R}           a local web page over both tools: publish a site, its domain, history, mail, folders\n"
-      printf "    ${A}developer-tools mailbox${R}      the account the links are mailed from; ${A}mailbox test <address>${R} sends a test there\n\n"
+      printf "    ${A}developer-tools mailbox${R}      the account the links are mailed from; ${A}mailbox test <address>${R} sends a test there\n"
+      printf "    ${A}developer-tools versions${R}     what is installed, the channel, and the newest release on it\n\n"
       printf "  ${D}Tools install to %s and keep their settings in ~/.config/<tool>/${R}\n\n" "$BIN"
       exit 0 ;;
     ui)      banner "developer-tools $VERSION" "web page"; ui_serve "${2:-}"; exit 0 ;;
@@ -143,6 +168,7 @@ main(){
              if [ "${2:-}" = test ]; then smtp_test "${3:-}"; exit $?; fi
              [ -t 0 ] || die "needs a terminal; or: developer-tools mailbox test <address>"
              { [ "$(mbox smtp_ready)" = yes ] && smtp_menu || setup_mailbox; }; exit 0 ;;
+    versions) versions; exit 0 ;;
     install) banner "developer-tools $VERSION" "installing everything  · $(channel) channel"
              resolve_base; install_picked $(seq 0 $(( ${#TOOLS[@]} - 1 ))); printf "\n" >&2; exit 0 ;;
     beta|stable) set_channel "$1"

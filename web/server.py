@@ -1,4 +1,4 @@
-import json, os, re, sys, time, html, subprocess
+import json, os, re, sys, time, html, subprocess, shutil
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -272,6 +272,21 @@ def start_account(body):
         if team: args += ["--team", team]
     if op == "remove": args.append(name)
     return run(args, env=env, kind="accounts", id=host)
+def updates():
+    """installed versions, the channel and the newest release on it, from the hub itself (one network call)"""
+    try: out = subprocess.run([SELF, "versions"], capture_output=True, text=True, timeout=20, env=dict(os.environ, TERM="dumb")).stdout
+    except Exception as e: return {"error": "could not ask the hub: %s" % e}
+    rows = dict(l.split("\t", 1) for l in out.splitlines() if "\t" in l)
+    tools = [dict(name=t, version="" if rows.get(t, "-") == "-" else rows.get(t, "")) for t in ("ship-site", "ship-apk", "developer-tools")]
+    return {"tools": tools, "channel": rows.get("channel", "stable"), "latest": rows.get("latest", ""), "bin": "/usr/local/bin"}
+def set_channel(body):
+    c = body.get("channel")
+    if c not in ("stable", "beta"): return {"error": "stable or beta?"}
+    r = subprocess.run([SELF, c], capture_output=True, text=True, env=dict(os.environ, TERM="dumb"))
+    return {"ok": True} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[-200:]}
+def start_update():
+    """developer-tools install: every tool and the hub itself onto the channel's newest release, streamed like any run"""
+    return run([SELF, "install"], kind="update", id="updates")
 def label_edit(body):
     pid, label = str(body.get("id", "")), str(body.get("label", "")).strip()[:40]
     d = load("ship-site", "config.json"); path = os.path.join(CONF, "ship-site", "config.json")
@@ -449,9 +464,7 @@ def data():
     tpl = dict(site=m.get("template_site", {}), apk=m.get("template_apk", {}))
     return dict(sites=sites, apps=apps, mailbox=box, templates=tpl, accounts=accounts, vercel_accounts=sorted(s.get("accounts", {})), firebase_accounts=s.get("fb_accounts", []),
                 can_publish=bool(SHIP_SITE), can_ship=bool(SHIP_APK), active=active_runs(), broken=[b.replace(os.path.expanduser("~"), "~") for b in BROKEN], hub_version=HUB_VERSION, port=PORT, channel=channel, page=page_hash(),
-                tools=[dict(name="ship-site", what="Build a web app and publish it to Vercel or Firebase", version=tool_version(SHIP_SITE)),
-                       dict(name="ship-apk", what="Build a Flutter APK, upload it to appho.st, mail the link", version=tool_version(SHIP_APK)),
-                       dict(name="developer-tools", what="The hub, and this page", version=HUB_VERSION)])
+                tools=[dict(name=t, version=tool_version(shutil.which(t) or "")) for t in ("ship-site", "ship-apk", "developer-tools")])   # the installed copies, not the ones this page runs
 
 import base64 as _b64
 PAGE_B64 = "@@PAGE_B64@@"
@@ -467,6 +480,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/": return self.send(200, page_src().encode(), "text/html; charset=utf-8")
         if u.path == "/api/data": return self.send(200, json.dumps(data()).encode(), "application/json")
         if u.path == "/api/run": return self.send(200, json.dumps(status(parse_qs(u.query).get("id", [""])[0])).encode(), "application/json")
+        if u.path == "/api/updates": return self.send(200, json.dumps(updates()).encode(), "application/json")
         self.send(404, b"not found", "text/plain")
     def do_POST(self):
         u = urlparse(self.path)
@@ -485,6 +499,9 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/mailbox": return self.send(200, json.dumps(mailbox_edit(body)).encode(), "application/json")
         if u.path == "/api/mail_test": return self.send(200, json.dumps(start_mail_test(body)).encode(), "application/json")
         if u.path == "/api/accounts": return self.send(200, json.dumps(start_account(body)).encode(), "application/json")
+        if u.path == "/api/channel": return self.send(200, json.dumps(set_channel(body)).encode(), "application/json")
+        if u.path == "/api/updates": return self.send(200, json.dumps(updates()).encode(), "application/json")
+        if u.path == "/api/update": return self.send(200, json.dumps(start_update()).encode(), "application/json")
         if u.path == "/api/account_label": return self.send(200, json.dumps(account_label(body)).encode(), "application/json")
         self.send(404, b"not found", "text/plain")
 
