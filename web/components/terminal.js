@@ -1,13 +1,13 @@
-// Terminal — a Mac terminal window that shows one command and streams its output.
+// Terminal: a Mac terminal window that shows one command and streams its output.
 // Terminal({tool, dir, tokens:[html], plain, run:{out,done,code,dry}|null, kind, hint})
 // followRun(run, runId, onDone) polls /api/run and appends lines to the open terminal; one loop for every kind of run.
 function Terminal(o){const r=o.run;const lines=r?fmtLog(r.out):[];const stages=r?stagesOf(lines,r.done):[];const dir=o.dir?home(o.dir).split('/').pop():'~';
  const status=!r?['','']:!r.done?['running'+(stages.length?' · '+stages[stages.length-1].l.toLowerCase():''),'st-run']:r.dry?['dry run passed','st-done']:r.code===0?['finished','st-done']:['exit '+r.code,'st-bad'];
  const prompt=`<span class=pr>➜</span><span class=pd>${esc(dir)}</span>`;
- return `<div class=console data-kind="${o.kind||'run'}"><div class=ch><span class=tl><i></i><i></i><i></i></span><span class=ttl>${esc(o.tool+' — '+dir+' — zsh')}</span><span class="st ${status[1]}">${r&&!r.done?PulseDot('#8FE3B5',5):''}${esc(status[0])}${r&&r.done?` <button class=clr onclick="dismissRun('${o.kind||'run'}')">clear</button>`:''}</span></div>
+ return `<div class=console data-kind="${o.kind||'run'}"><div class=ch><span class=tl><i></i><i></i><i></i></span><span class=ttl>${esc(o.tool+' · '+dir+' · zsh')}</span><span class="st ${status[1]}">${r&&!r.done?PulseDot('#8FE3B5',5):''}${esc(status[0])}${r&&r.done&&r.rid?` <button class=clr onclick="openLog('${r.rid}')" title="Open the log file; after a failed build, the build log">log</button>`:''}${r&&r.done?` <button class=clr onclick="dismissRun('${o.kind||'run'}')">clear</button>`:''}</span></div>
  <div class=body><div class=cmd>${prompt}<span class=tx>${o.tokens.join(' ')}</span>${r?'':'<span class=caret></span>'}<button class=cp onclick="copyCmd(this,'${esc(o.plain).replace(/'/g,'&#39;')}')" title="Copy the command to run it in your own terminal">copy</button></div>
  <div class=log id=log>${r?lines.map(logLine).join(''):`<span class=e>${o.hint||''}</span>`}${r&&!r.done?'<div class="ln cr"><span class=ts></span><span class=caret></span></div>':''}${r&&r.done?`<div class=ln style="padding-top:6px"><span class=ts></span><span class=prompt>${prompt} <span class=caret></span></span></div>`:''}</div></div></div>`}
-const logLine=l=>`<div class="ln${l.head?' head':''}"><span class=ts>${l.head?'':esc(l.ts)}</span><span class="tx ${l.cls}">${esc(l.text)}</span></div>`;
+const logLine=l=>`<div class="ln${l.head?' head':''}"><span class=ts>${l.head?'':esc(l.ts)}</span><span class="tx ${l.cls}">${esc(l.text).replace(/(\/[^\s:]+\.log)/g,(m)=>`<a class=lf onclick="openPath('${m}')" title="Open this file">${m}</a>`)}</span></div>`;
 function fmtLog(out){const L=[];let ts='';for(const raw of String(out||'').split('\n')){let t=raw.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'').replace(/\x1b\(B/g,'');const m0=t.match(/^\[(\d\d:\d\d:\d\d)\] ?/);let stamp='';if(m0){stamp=m0[1];t=t.slice(m0[0].length)}
   if(t.includes('\r'))t=t.split('\r').filter(x=>x.trim()).pop()||'';if(!t.trim())continue;
   if(stamp)ts=stamp;let text=t;
@@ -31,9 +31,9 @@ function followRun(run,rid,onDone){const tick=async()=>{let st;try{st=await (awa
   if(st.done){run.done=true;run.code=st.code;if(window.renderRunning)renderRunning();await onDone(run);return}
   if(window.renderRunning)renderRunning();streamTerminal(run);setTimeout(tick,1000)};tick()}
 // startRun(run, url, body, onDone): posts the start, then follows it; any failure lands in the terminal instead of a stuck "running"
-async function startRun(run,url,body,onDone){let j;try{const r=await fetch(url+'?t='+T,{method:'POST',body:JSON.stringify(body)});j=r.ok?await r.json():{error:'the page server answered '+r.status+' — restart developer-tools ui'}}catch(e){j={error:'could not reach the page server: '+e.message}}
- if(j.error){run.out='✗ '+j.error;run.done=true;run.code=1;if(window.renderRunning)renderRunning();render();return}ATTACHED.add(j.run);followRun(run,j.run,onDone)}
+async function startRun(run,url,body,onDone){let j;try{const r=await fetch(url+'?t='+T,{method:'POST',body:JSON.stringify(body)});j=r.ok?await r.json():{error:'the page server answered '+r.status+'. Restart developer-tools ui.'}}catch(e){j={error:'could not reach the page server: '+e.message}}
+ if(j.error){run.out='✗ '+j.error;run.done=true;run.code=1;if(window.renderRunning)renderRunning();render();return}ATTACHED.add(j.run);run.rid=j.run;followRun(run,j.run,onDone)}
 // attachRuns(active, make): for each run the server reports still going, build the page's run object and follow it.
 // make(meta) returns {slot, run, onDone} or null; called on every data load, so a reloaded page is back on its runs.
 const ATTACHED=new Set();
-function attachRuns(active,make){(active||[]).forEach(m=>{if(ATTACHED.has(m.run))return;const a=make(m);if(!a)return;ATTACHED.add(m.run);ST[a.slot]=a.run;followRun(a.run,m.run,a.onDone)})}
+function attachRuns(active,make){(active||[]).forEach(m=>{if(ATTACHED.has(m.run))return;const a=make(m);if(!a)return;ATTACHED.add(m.run);a.run.rid=m.run;ST[a.slot]=a.run;followRun(a.run,m.run,a.onDone)})}

@@ -697,6 +697,10 @@ FAKE
   check "apk flags: a dry run with no terminal and no questions" grep -q "Dry run · would run" <<<"$out"
   check "apk flags: --version=next raises the build number"   grep -q "1.0.0+2" <<<"$out"
   check "apk flags: --no-mail answers the Email step"         grep -q "none — skipped" <<<"$out"
+  fakefl="$(mktemp -d)"; printf '#!/bin/bash\necho "no target lib/main.dart" >&2; exit 1\n' > "$fakefl/flutter"; chmod +x "$fakefl/flutter"
+  rc=0; PATH="$fakefl:$PATH" bash ship-apk/ship-apk --app flagapp --fresh --no-mail --yes </dev/null >/dev/null 2>&1 || rc=$?
+  check "apk flags: a failed build exits non-zero"            [ "$rc" -ne 0 ]
+  rm -rf "$fakefl"
   bash -c 'source ./ship-apk/ship-apk; cfg proj_del flagapp' 2>/dev/null || true; rm -rf "$fa"
   check "apk flags: listed in --help"                         bash -c 'bash ship-apk/ship-apk --help 2>&1 | grep -q -- "--last-build"'
   check "domain: y keeps an odd ending"                      bash -c 'source ./ship-site/ship-site; DRY=no; printf "admin.sukungarden\nyr" | custom_domain firebase a@x.com shop-1/shop-1 shop-1' && [ "$(vc domain_get shop-1/shop-1)" = admin.sukungarden ]

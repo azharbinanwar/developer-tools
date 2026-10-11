@@ -1,4 +1,4 @@
-// AppButton — one button, six variants, three sizes. Processing shows a spinner and disables it.
+// AppButton: one button, six variants, three sizes. Processing shows a spinner and disables it.
 // AppButton({text, variant:'Primary|Error|Elevator|Outline|ErrorOutline|Text', size:'Large|Medium|Small', enabled, processing, leftIcon, fullWidth, onclick, type, id, title, attrs})
 function AppButton(o){
  const v=(o.variant||'Primary').toLowerCase(),s=(o.size||'Large').toLowerCase();

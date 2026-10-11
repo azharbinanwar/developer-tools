@@ -1,4 +1,4 @@
-// Icon — Lucide glyphs, inlined (the page works offline). 24-box, stroke 2, round caps.
+// Icon: Lucide glyphs, inlined (the page works offline). 24-box, stroke 2, round caps.
 const LUCIDE={
  'layout-dashboard':'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
  globe:'<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
